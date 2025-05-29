@@ -196,3 +196,6 @@ parsedDotEnv mode path =
 
 parsedDotEnvDebug :: FilePath -> IO [(String, String)]
 parsedDotEnvDebug = parsedDotEnv Debug
+
+parsed :: FilePath -> IO [(String, String)]
+parsed = parsedDotEnv Raw
