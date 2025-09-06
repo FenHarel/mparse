@@ -1,13 +1,13 @@
-cabal-version:      3.0
-name:               mparse
-version:            0.1.0.0
-license:            MIT
-license-file:       LICENSE
-author:             Michael Miller
-maintainer:         mikeaamiller117@gmail.com
-category:           Development
-build-type:         Simple
-extra-doc-files:    CHANGELOG.md
+cabal-version:   3.0
+name:            mparse
+version:         0.1.0.1
+license:         MIT
+license-file:    LICENSE
+author:          Michael Miller
+maintainer:      mikeaamiller117@gmail.com
+category:        Development
+build-type:      Simple
+extra-doc-files: CHANGELOG.md
 
 common warnings
     ghc-options: -Wall
@@ -15,32 +15,35 @@ common warnings
 library
     import:           warnings
     exposed-modules:
-        Mparse.Parser,
-        Mparse.DotEnv,
-        Mparse.Format,
+        Mparse.DotEnv
+        Mparse.Format
+        Mparse.Parser
+
     build-depends:
-      base ^>=4.17.2.1,
-      containers,
+        , base        ^>=4.17.2.1
+        , containers
+
     hs-source-dirs:   src
     default-language: Haskell2010
 
 test-suite mparse-test
-    import:           warnings
-    default-language: Haskell2010
+    import:             warnings
+    default-language:   Haskell2010
     other-modules:
-        LibSpec,
-        ParserSpec,
-        FormatSpec,
-        DotEnvSpec,
-    type:             exitcode-stdio-1.0
-    hs-source-dirs:   test
-    main-is:          Spec.hs
+        DotEnvSpec
+        FormatSpec
+        LibSpec
+        ParserSpec
+
+    type:               exitcode-stdio-1.0
+    hs-source-dirs:     test
+    main-is:            Spec.hs
     build-depends:
-        base ^>=4.17.2.1,
-        mparse,
-        hspec,
-        hspec-discover,
-        raw-strings-qq
-    ghc-options: -O -threaded -rtsopts -with-rtsopts=-N
-    build-tool-depends:
-        hspec-discover:hspec-discover
+        , base            ^>=4.17.2.1
+        , hspec
+        , hspec-discover
+        , mparse
+        , raw-strings-qq
+
+    ghc-options:        -O -threaded -rtsopts -with-rtsopts=-N
+    build-tool-depends: hspec-discover:hspec-discover
