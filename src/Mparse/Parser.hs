@@ -117,6 +117,12 @@ spaces = void $ many' (sat (\c -> c == ' ' || c == '\t'))
 spacesNL :: Parser ()
 spacesNL = void $ many' (sat isSpace)
 
+newLine :: Parser Char
+newLine = sat (== '\n')
+
+notNewLine :: Parser Char
+notNewLine = sat (/= '\n')
+
 token :: Parser a -> Parser a
 token p = p <* spaces
 

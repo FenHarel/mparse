@@ -179,9 +179,7 @@ parseAll =
     <|> return []
   where
     comment :: Parser String
-    comment = token (char '#') >> many' (sat (/= '\n'))
-    newLine :: Parser Char
-    newLine = sat (== '\n')
+    comment = token (char '#') >> many' notNewLine
 
 parsedComponentizedValues :: String -> Maybe [ComponentizedValue]
 parsedComponentizedValues = parsedValue parseAll
