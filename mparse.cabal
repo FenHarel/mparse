@@ -1,6 +1,6 @@
 cabal-version:   3.0
 name:            mparse
-version:         0.1.0.1
+version:         0.1.1.0
 license:         MIT
 license-file:    LICENSE
 author:          Michael Miller
@@ -20,7 +20,7 @@ library
         Mparse.Parser
 
     build-depends:
-        , base        ^>=4.17.2.1
+        , base        ^>=4.21.0.0
         , containers
 
     hs-source-dirs:   src
@@ -39,7 +39,7 @@ test-suite mparse-test
     hs-source-dirs:     test
     main-is:            Spec.hs
     build-depends:
-        , base            ^>=4.17.2.1
+        , base            ^>=4.21.0.0
         , hspec
         , hspec-discover
         , mparse
