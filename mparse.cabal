@@ -18,6 +18,7 @@ library
         Mparse.DotEnv
         Mparse.Format
         Mparse.Parser
+        Mparse.EParser
 
     build-depends:
         , base        ^>=4.20.0.0
@@ -34,6 +35,7 @@ test-suite mparse-test
         FormatSpec
         LibSpec
         ParserSpec
+        EParserSpec
 
     type:               exitcode-stdio-1.0
     hs-source-dirs:     test
