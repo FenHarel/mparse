@@ -6,15 +6,24 @@ import Data.Function (on)
 
 type Position = Int
 
-type InputPosition = (String, Position)
+-- (line #, relative character position, absolute character position)
+-- start at (0, 0, 0)
+-- always increment acp
+-- when consuming newline -> reset rcp to 0
+-- when incrementing rcp from 0 -> 1, increment line number
+type LinePosition = (Int, Int, Int)
 
-data ParserErrorTrace = RootError String Position | ParentError String Position ParserErrorTrace deriving (Show, Eq)
+type InputPosition = (String, LinePosition)
+
+type MessagePosition = (String, LinePosition)
+
+data ParserErrorTrace = RootError MessagePosition | ParentError MessagePosition ParserErrorTrace deriving (Show, Eq)
 
 instance Ord ParserErrorTrace where
   compare = on compare etp'
     where
-      etp' (RootError _ p) = p
-      etp' (ParentError _ p _) = p
+      etp' (RootError (_, p)) = p
+      etp' (ParentError (_, p) _) = p
 
 data Expectation = None | Expectation String deriving (Show, Eq)
 
@@ -23,11 +32,11 @@ expectations _ exp' None = exp'
 expectations _ None exp'' = exp''
 expectations f (Expectation s) (Expectation s') = Expectation $ f s s'
 
-errTrace :: Expectation -> Position -> ParserErrorTrace -> ParserErrorTrace
-errTrace None _ = id
-errTrace (Expectation exp') p = ParentError exp' p
+trace' :: Expectation -> InputPosition -> ParserErrorTrace -> ParserErrorTrace
+trace' None _ = id
+trace' (Expectation exp') input = ParentError (exp', snd input)
 
-data ParseResult a = Success (a, String, Position) | Failure ParserErrorTrace deriving (Show, Eq)
+data ParseResult a = Success (a, InputPosition) | Failure ParserErrorTrace deriving (Show, Eq)
 
 succeeded :: ParseResult a -> Bool
 succeeded (Success _) = True
@@ -36,15 +45,17 @@ succeeded _ = False
 someSucceeded :: [ParseResult a] -> Bool
 someSucceeded = any succeeded
 
+type ParseFunction a = InputPosition -> [ParseResult a]
+
 data EParser a = EParser
   { expects :: Expectation,
-    parse :: (String, Position) -> [ParseResult a]
+    parse :: ParseFunction a
   }
 
 instance Functor EParser where
   fmap f ep = EParser (expects ep) (fmap mapper . parse ep)
     where
-      mapper (Success (a, input, p)) = Success $ (f a, input, p)
+      mapper (Success (a, input)) = Success $ (f a, input)
       mapper (Failure et) = Failure $ et
 
 instance Applicative EParser where
@@ -55,45 +66,43 @@ instance Applicative EParser where
       sexp = expects ep'
       exp' :: Expectation
       exp' = expectations (\s s' -> s ++ " THEN " ++ s') fexp sexp
-      parse' (input, p) = do
-        epr <- parse ep (input, p)
+      parse' input = do
+        epr <- parse ep input
         case epr of
-          (Failure et') -> pure $ Failure $ errTrace fexp p et'
-          (Success (f, input', p')) -> do
-            epr' <- parse ep' (input', p')
+          (Failure et') -> pure $ Failure $ trace' fexp input et'
+          (Success (f, input')) -> do
+            epr' <- parse ep' input'
             case epr' of
-              (Failure et') -> pure $ Failure $ errTrace sexp p' et'
-              (Success (a, input'', p'')) -> pure $ Success ((f a), input'', p'')
+              (Failure et') -> pure $ Failure $ trace' sexp input' et'
+              (Success (a, input'')) -> pure $ Success (f a, input'')
 
 instance Monad EParser where
-  ep >>= f = EParser exp' $
-    \(input, p) ->
+  (EParser exp' parse') >>= f = EParser exp' $
+    \input ->
       concat
         [ case pr of
-            (Failure et) -> [Failure $ errTrace exp' p et]
-            (Success (a, input', p')) -> parse (f a) (input', p')
-        | pr <- parse ep (input, p)
+            (Failure et) -> [Failure $ trace' exp' input et]
+            (Success (a, input')) -> parse (f a) input'
+        | pr <- parse' input
         ]
-    where
-      exp' = expects ep
 
 instance Alternative EParser where
   empty = zero
-  ep <|> ep' = EParser exp' alternative
+  (EParser exp' parse') <|> (EParser exp'' parse'') = EParser exp''' alternative
     where
-      exp' :: Expectation
-      exp' = on (expectations (\s s' -> s ++ " OR " ++ s')) expects ep ep'
-      alternative (input, p)
+      exp''' :: Expectation
+      exp''' = expectations (\s s' -> s ++ " OR " ++ s') exp' exp''
+      alternative input
         | someSucceeded firstParse = firstParse
         | otherwise = secondParse
         where
-          firstParse = parse ep (input, p)
-          secondParse = parse ep' (input, p)
+          firstParse = parse' input
+          secondParse = parse'' input
 
 -- Parser constructor primitives
---
+
 -- Constructs a Parser with no expectation
-parser :: ((String, Position) -> [ParseResult a]) -> EParser a
+parser :: ParseFunction a -> EParser a
 parser = EParser None
 
 -- Adds an expectation to a parser
@@ -103,7 +112,7 @@ expect exp' (EParser _ parse') = (EParser (Expectation exp') parse')
 
 -- pure for the EParser monad
 result :: a -> EParser a
-result a = parser (\(input, p) -> [Success (a, input, p)])
+result a = parser (\(input, p) -> [Success (a, (input, p))])
 
 -- empty for the EParser applicative
 zero :: EParser a
@@ -115,8 +124,9 @@ zero = parser $ const []
 item :: EParser Char
 item = parser parseChar
   where
-    parseChar ([], p) = [Failure (RootError "Unexpected end of input." p)]
-    parseChar ((x : xs), p) = [Success (x, xs, p + 1)]
+    parseChar ([], p) = [Failure (RootError ("Unexpected end of input.", p))]
+    parseChar (('\n' : xs), (lcp, _, acp)) = [Success ('\n', (xs, (lcp + 1, 0, acp + 1)))]
+    parseChar ((x : xs), (lcp, rcp, acp)) = [Success (x, (xs, (lcp, rcp + 1, acp + 1)))]
 
 -- Consumes a character if it satisfies the given predicate
 sat :: (Char -> Bool) -> EParser Char
@@ -125,7 +135,7 @@ sat predicate = item >>= evaluate'
     evaluate' :: Char -> EParser Char
     evaluate' c'
       | predicate c' = result c'
-      | otherwise = parser $ \(_, p) -> [Failure (RootError ("Received character: '" ++ [c'] ++ "'") p)]
+      | otherwise = parser $ \(_, p) -> [Failure (RootError (("Received character: '" ++ [c'] ++ "'"), p))]
 
 -- Consumes a specific character
 char :: Char -> EParser Char
@@ -244,27 +254,28 @@ spacesNL = repeated (space <|> tab <|> newLine)
 token :: EParser a -> EParser a
 token ep = ep <* spaces
 
-uparse :: EParser a -> String -> [ParseResult a]
-uparse ep input = map enhance $ parse ep (input, 0)
+parseResults :: EParser a -> String -> [ParseResult a]
+parseResults (EParser exp' parse') input = map trace'' . parse' $ input'
   where
-    enhance :: ParseResult a -> ParseResult a
-    enhance (Failure et) = Failure $ errTrace (expects ep) 0 et
-    enhance s = s
+    input' = (input, (0, 0, 0))
+    trace'' :: ParseResult a -> ParseResult a
+    trace'' (Failure et) = Failure $ trace' exp' input' et
+    trace'' s = s
 
 data ParsedData a = ParsedData a | NoData | ParserError ParserErrorTrace deriving (Show, Eq)
 
 parsed :: EParser a -> String -> ParsedData a
-parsed ep input = case parse ep (input, 0) of
+parsed ep input = case parseResults ep input of
   [] -> NoData
-  ((Success (a, _, _)) : _) -> ParsedData a
-  ((Failure et) : _) -> ParserError . errTrace (expects ep) 0 $ et
+  ((Success (a, _)) : _) -> ParsedData a
+  ((Failure et) : _) -> ParserError et
 
 parseForced :: EParser a -> String -> a
-parseForced ep input = case parse ep (input, 0) of
-  [] -> error "No parsed data"
-  ((Failure (RootError msg p)) : _) -> error $ "Failed to parse: " ++ msg ++ " at position " ++ show p
-  ((Failure (ParentError msg p _)) : _) -> error $ "Failed to parse: " ++ msg ++ " at position " ++ show p ++ " and more..."
-  ((Success (a, _, _)) : _) -> a
+parseForced ep input = case parsed ep input of
+  ParsedData a -> a
+  NoData -> error "No parsed data"
+  ParserError (RootError (msg, p)) -> error $ "Failed to parse: " ++ msg ++ " at position " ++ show p
+  ParserError (ParentError (msg, p) _) -> error $ "Failed to parse: " ++ msg ++ " at position " ++ show p ++ " and more..."
 
 normalizeTrace :: String -> ParserErrorTrace -> [String]
 normalizeTrace _ = addToTrace 0
@@ -288,12 +299,12 @@ normalizeTrace _ = addToTrace 0
     header 0 = ""
     header n = (indented (n - 1) vLine) ++ padding bFactor
     addToTrace :: Int -> ParserErrorTrace -> [String]
-    addToTrace _ (RootError msg p) = (msg ++ " at position " ++ show p) : []
-    addToTrace pad (ParentError msg p (RootError msg' p')) =
+    addToTrace _ (RootError (msg, p)) = (msg ++ " at position " ++ show p) : []
+    addToTrace pad (ParentError (msg, p) (RootError (msg', p'))) =
       (header pad ++ msg ++ " at position " ++ show p)
         : ((indented pad vLine) ++ padding bFactor ++ msg' ++ " at position " ++ show p')
         : []
-    addToTrace pad (ParentError msg p et') =
+    addToTrace pad (ParentError (msg, p) et') =
       (header pad ++ msg ++ " at position " ++ show p)
         : addToTrace (pad + 1) et'
 
