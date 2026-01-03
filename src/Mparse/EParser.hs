@@ -8,16 +8,6 @@ type Position = Int
 
 type InputPosition = (String, Position)
 
-data Expectation = None | Expectation String deriving (Show, Eq)
-
-expectation :: String -> Expectation
-expectation = Expectation
-
-expectations :: (String -> String -> String) -> Expectation -> Expectation -> Expectation
-expectations _ exp' None = exp'
-expectations _ None exp'' = exp''
-expectations f (Expectation s) (Expectation s') = Expectation $ f s s'
-
 data ParserErrorTrace = RootError String Position | ParentError String Position ParserErrorTrace deriving (Show, Eq)
 
 instance Ord ParserErrorTrace where
@@ -25,6 +15,13 @@ instance Ord ParserErrorTrace where
     where
       etp' (RootError _ p) = p
       etp' (ParentError _ p _) = p
+
+data Expectation = None | Expectation String deriving (Show, Eq)
+
+expectations :: (String -> String -> String) -> Expectation -> Expectation -> Expectation
+expectations _ exp' None = exp'
+expectations _ None exp'' = exp''
+expectations f (Expectation s) (Expectation s') = Expectation $ f s s'
 
 errTrace :: Expectation -> Position -> ParserErrorTrace -> ParserErrorTrace
 errTrace None _ = id
@@ -93,33 +90,35 @@ instance Alternative EParser where
           firstParse = parse ep (input, p)
           secondParse = parse ep' (input, p)
 
-expo :: Expectation -> EParser a -> EParser a
-expo exp' (EParser _ parse') = EParser exp' parse'
-
-expect :: String -> EParser a -> EParser a
-expect = expo . expectation
-
+-- Parser constructor primitives
+--
+-- Constructs a Parser with no expectation
 parser :: ((String, Position) -> [ParseResult a]) -> EParser a
 parser = EParser None
 
-eparser :: Expectation -> ((String, Position) -> [ParseResult a]) -> EParser a
-eparser exp' = expo exp' . parser
+-- Adds an expectation to a parser
+expect :: String -> EParser a -> EParser a
+expect [] ep = ep
+expect exp' (EParser _ parse') = (EParser (Expectation exp') parse')
 
+-- pure for the EParser monad
 result :: a -> EParser a
 result a = parser (\(input, p) -> [Success (a, input, p)])
 
-rootError :: String -> ((String, Position) -> ParseResult a)
-rootError msg = \(_, p) -> Failure (RootError msg p)
-
+-- empty for the EParser applicative
 zero :: EParser a
 zero = parser $ const []
 
+-- Parser primitives
+--
+-- Consumes a character
 item :: EParser Char
 item = parser parseChar
   where
     parseChar ([], p) = [Failure (RootError "Unexpected end of input." p)]
     parseChar ((x : xs), p) = [Success (x, xs, p + 1)]
 
+-- Consumes a character if it satisfies the given predicate
 sat :: (Char -> Bool) -> EParser Char
 sat predicate = item >>= evaluate'
   where
@@ -128,27 +127,35 @@ sat predicate = item >>= evaluate'
       | predicate c' = result c'
       | otherwise = parser $ \(_, p) -> [Failure (RootError ("Received character: '" ++ [c'] ++ "'") p)]
 
+-- Consumes a specific character
 char :: Char -> EParser Char
 char c = sat (== c)
 
+-- Consumes a character if it is not equal to the given character
 notChar :: Char -> EParser Char
 notChar c = sat (/= c)
 
+-- Consumes a numeric character
 digit :: EParser Char
 digit = sat isDigit
 
+-- Consumes a lowercase letter
 lower :: EParser Char
 lower = sat isLower
 
+-- Consumes an uppercase letter
 upper :: EParser Char
 upper = sat isUpper
 
+-- Consumes an alphabetical character
 letter :: EParser Char
 letter = lower <|> upper
 
+-- Consumes am alphanumeric character
 alpha :: EParser Char
 alpha = letter <|> digit
 
+-- Consumes a specific string
 exact :: String -> EParser String
 exact "" = result ""
 exact s = expect exp' $ ext' s
@@ -158,51 +165,53 @@ exact s = expect exp' $ ext' s
     ext' "" = result ""
     ext' (x : xs) = char x >> ext' xs >> result (x : xs)
 
--- combinators
---
+-- Parser combinator primitives
+
+-- Applies two parsers and combines their results with a combinator function
 combine :: (a -> b -> c) -> EParser a -> EParser b -> EParser c
 combine f ep ep' = do
   x <- ep
   xs <- ep'
   pure $ f x xs
 
-(>:) :: EParser a -> EParser [a] -> EParser [a]
-ep >: ep' = combine (:) ep ep'
+(|:) :: EParser a -> EParser [a] -> EParser [a]
+ep |: ep' = combine (:) ep ep'
 
-ident :: EParser String
-ident = alpha_ >: repeated (alpha_ <|> digit)
-  where
-    alpha_ = letter <|> char '_'
+(|::) :: EParser a -> (a -> b -> c) -> (EParser b -> EParser c)
+ep |:: f = combine f ep
 
+-- Captures `0..n` `a` values and collects them in a list
 repeated :: EParser a -> EParser [a]
-repeated ep = (ep >: (repeated ep)) <|> result []
+repeated ep = (ep |: (repeated ep)) <|> result []
 
+-- Captures `0..n` `a` values and collects them in a list
 repeated1 :: EParser a -> EParser [a]
-repeated1 ep = (ep >: (repeated ep))
+repeated1 ep = (ep |: (repeated ep))
 
+-- Captures `1..n` `a` values separated by b values
 sepBy :: EParser a -> EParser b -> EParser [a]
-sepBy ep separator = ep >: (repeated (separator >> ep))
+sepBy ep separator = ep |: (repeated (separator >> ep))
 
 (//) :: EParser a -> EParser b -> EParser [a]
 ep // ep' = sepBy ep ep'
 
+-- Captures a `b` and `c` value separated by an `a` value and returns (`b`, `c`)
 between :: EParser a -> EParser b -> EParser c -> EParser (b, c)
-between separator ep ep' =
-  do
-    b <- ep
-    _ <- separator
-    c <- ep'
-    pure $ (b, c)
+between separator ep = (ep <* separator) |:: (,)
 
+-- Attempts to capture an `a` value otherwise returns a default
 defaults :: a -> EParser a -> EParser a
 defaults d ep = ep <|> result d
 
+-- Attempts to capture an `a` value otherwise returns Nothing
 optional :: EParser a -> EParser (Maybe a)
 optional ep = (Just <$> ep) <|> result Nothing
 
+-- Captures a `c` value that is bracketed by an `a` value and a `b` value
 bracket :: EParser a -> EParser b -> EParser c -> EParser c
 bracket open close ep = open >> ep <* close
 
+-- Captures a positive integer of any length
 nat :: EParser Int
 nat = expect exp' $ read <$> repeated1 digit
   where

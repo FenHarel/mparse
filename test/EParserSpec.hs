@@ -66,7 +66,7 @@ spec = do
       EP.uparse (EP.token (EP.char 'a')) "a   bc" `shouldBe` [EP.Success ('a', "bc", 4)]
 
     it "between parses values separated by another parser" $ do
-      EP.uparse (EP.between (EP.char '=') EP.ident EP.nat) "name=42" `shouldBe` [EP.Success (("name", 42), "", 7)]
+      EP.uparse (EP.between (EP.char '=') (EP.repeated1 EP.letter) EP.nat) "name=42" `shouldBe` [EP.Success (("name", 42), "", 7)]
 
     it "optional makes a parser optional" $ do
       EP.uparse (EP.optional (EP.char 'a')) "abc" `shouldBe` [EP.Success (Just 'a', "bc", 1)]
