@@ -2,6 +2,7 @@ module EParserSpec (spec) where
 
 import Control.Applicative (Alternative ((<|>)))
 import Data.Char (isDigit)
+import Mparse.EParser ((//))
 import qualified Mparse.EParser as EP
 import Test.Hspec
 
@@ -25,70 +26,48 @@ spec = do
 
     it "sat matches characters that satisfy a predicate" $ do
       EP.uparse (EP.digit) "123" `shouldBe` [EP.Success ('1', "23", 1)]
-      EP.uparse (EP.digit) "abc" `shouldBe` [EP.Failure (EP.ParentError "Expected numeric digit." 0 (EP.RootError "Received character: 'a'" 1))]
+      EP.uparse (EP.digit) "abc" `shouldBe` [EP.Failure (EP.RootError "Received character: 'a'" 1)]
 
     it "char matches a specific character" $ do
-      -- EP.uparse (EP.char 'a') "abc" `shouldBe` []
       EP.uparse (EP.char 'a') "abc" `shouldBe` [EP.Success ('a', "bc", 1)]
       EP.uparse (EP.char 'a') "xyz" `shouldBe` [EP.Failure (EP.RootError "Received character: 'x'" 1)]
 
     it "string matches an exact string" $ do
-      EP.expects (EP.char' (EP.Expectation "sdfsdf") 'c') `shouldBe` (EP.Expectation "sdfsdf")
-      EP.uparse (EP.string "hello") "hello world" `shouldBe` [EP.Success ("hello", " world", 5)]
-      EP.uparse (EP.string "hello") "hell no" `shouldBe` [EP.Failure (EP.ParentError "Expected the string: 'hello'" 0 (EP.RootError "Received character: ' '" 5))]
-      EP.expects (EP.string "hello") `shouldBe` (EP.Expectation "Expected the string: 'hello'")
-    it "asdfsdf" $
-      EP.printErrorTrace
-        (EP.ParentError "Expected the string: 'hello'" 0 (EP.ParentError "Expected the string: 'hello'" 3 (EP.ParentError "Expected the string: 'hello'" 3 (EP.ParentError "Expected the string: 'hello'" 3 (EP.RootError "Received character: ' '" 5)))))
-        >>= shouldBe [()]
+      EP.uparse (EP.exact "hello") "hello world" `shouldBe` [EP.Success ("hello", " world", 5)]
+      EP.uparse (EP.exact "hello") "hell no" `shouldBe` [EP.Failure (EP.ParentError "Expected the string: 'hello'" 0 (EP.RootError "Received character: ' '" 5))]
+      EP.expects (EP.exact "hello") `shouldBe` (EP.Expectation "Expected the string: 'hello'")
+  describe "combinators" $ do
+    it "many' collects zero or more occurrences" $ do
+      EP.uparse (EP.repeated1 (EP.char 'a')) "aaabc" `shouldBe` [EP.Success (replicate 3 'a', "bc", 3)]
+      EP.uparse (EP.repeated (EP.char 'a')) "aaabc" `shouldBe` [EP.Success (replicate 3 'a', "bc", 3)]
+      EP.uparse (EP.repeated1 (EP.char 'a')) "xyz" `shouldBe` [EP.Failure (EP.RootError "Received character: 'x'" 1)]
 
--- describe "combinators" $ do
---     it "many' collects zero or more occurrences" $ do
---     parse (many' (char 'a')) "aaabc" `shouldbe` [(replicate 3 'a', "bc")]
---     parse (many' (char 'a')) "xyz" `shouldbe` [("", "xyz")]
+    it "alternative (<|>) tries parsers in order" $ do
+      EP.uparse (EP.char 'a' <|> EP.char 'b') "abc" `shouldBe` [EP.Success ('a', "bc", 1)]
+      EP.uparse (EP.char 'a' <|> EP.char 'b') "bcd" `shouldBe` [EP.Success ('b', "cd", 1)]
+      EP.uparse (EP.char 'a' <|> EP.char 'b') "xyz" `shouldBe` [EP.Failure (EP.RootError "Received character: 'x'" 1)]
 
---     it "many1 requires at least one occurrence" $ do
---     parse (many1 (char 'a')) "aaabc" `shouldbe` [(replicate 3 'a', "bc")]
---     parse (many1 (char 'a')) "xyz" `shouldbe` []
+    it "sepby parses items separated by a delimiter" $ do
+      EP.uparse (EP.digit // EP.char ',') "1,2,3" `shouldBe` [EP.Success (['1', '2', '3'], "", 5)]
+      EP.uparse (EP.digit // EP.char ',') "1" `shouldBe` [EP.Success (['1'], "", 1)]
 
---     it "alternative (<|>) tries parsers in order" $ do
---     parse (char 'a' <|> char 'b') "abc" `shouldbe` [('a', "bc")]
---     parse (char 'a' <|> char 'b') "bcd" `shouldbe` [('b', "cd")]
---     parse (char 'a' <|> char 'b') "xyz" `shouldbe` []
+    it "bracket parses content between delimiters" $ do
+      EP.uparse (EP.bracket (EP.char '(') (EP.char ')') (EP.repeated1 EP.letter)) "(abc)" `shouldBe` [EP.Success ("abc", "", 5)]
 
---     it "sepby parses items separated by a delimiter" $ do
---     parse (digit `sepby` char ',') "1,2,3" `shouldbe` [(['1', '2', '3'], "")]
---     parse (digit `sepby` char ',') "1" `shouldbe` [(['1'], "")]
+  describe "complex parsers" $ do
+    it "nat parses natural numbers" $ do
+      EP.uparse EP.nat "123abc" `shouldBe` [EP.Success (123, "abc", 3)]
+      EP.uparse EP.nat "abc" `shouldBe` [EP.Failure (EP.ParentError "Expected numeric characters" 0 (EP.RootError "Received character: 'a'" 1))]
 
---     it "bracket parses content between delimiters" $ do
---     parse (bracket (char '(') (many1 letter) (char ')')) "(abc)" `shouldbe` [("abc", "")]
+    it "spaces consumes whitespace" $ do
+      EP.uparse EP.spaces "   abc" `shouldBe` [EP.Success ("   ", "abc", 3)]
 
--- describe "complex parsers" $ do
---     it "nat parses natural numbers" $ do
---     parse nat "123abc" `shouldbe` [(123, "abc")]
---     parse nat "abc" `shouldbe` []
+    it "token consumes trailing whitespace" $ do
+      EP.uparse (EP.token (EP.char 'a')) "a   bc" `shouldBe` [EP.Success ('a', "bc", 4)]
 
---     it "ident parses identifiers" $ do
---     parse ident "abc123" `shouldbe` [("abc123", "")]
---     parse ident "_var" `shouldbe` [("_var", "")]
---     parse ident "123abc" `shouldbe` []
+    it "between parses values separated by another parser" $ do
+      EP.uparse (EP.between (EP.char '=') EP.ident EP.nat) "name=42" `shouldBe` [EP.Success (("name", 42), "", 7)]
 
---     it "spaces consumes whitespace" $ do
---     parse spaces "   abc" `shouldbe` [((), "abc")]
-
---     it "token consumes trailing whitespace" $ do
---     parse (token (char 'a')) "a   bc" `shouldbe` [('a', "bc")]
-
---     it "between parses values separated by another parser" $ do
---     parse (between (char '=') ident nat) "name=42" `shouldbe` [(("name", 42), "")]
-
---     it "zeroorone makes a parser optional" $ do
---     parse (zeroorone (char 'a')) "abc" `shouldbe` [(just 'a', "bc")]
---     parse (zeroorone (char 'a')) "xyz" `shouldbe` [(nothing, "xyz")]
-
---     it "pair combines two characters into a string" $ do
---     parse (pair (char 'a') (char 'b')) "abc" `shouldbe` [("ab", "c")]
-
---     it "parsedvalue extracts values from successful parses" $ do
---     parsedvalue nat "123" `shouldbe` just 123
---     parsedvalue nat "abc" `shouldbe` nothing
+    it "optional makes a parser optional" $ do
+      EP.uparse (EP.optional (EP.char 'a')) "abc" `shouldBe` [EP.Success (Just 'a', "bc", 1)]
+      EP.uparse (EP.optional (EP.char 'a')) "xyz" `shouldBe` [EP.Success (Nothing, "xyz", 0)]
