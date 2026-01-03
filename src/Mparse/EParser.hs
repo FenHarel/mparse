@@ -205,6 +205,10 @@ sepBy ep separator = ep |: (repeated (separator >> ep))
 (//) :: EParser a -> EParser b -> EParser [a]
 ep // ep' = sepBy ep ep'
 
+counted :: Int -> EParser a -> EParser [a]
+counted 0 _ = result []
+counted n ep = ep |: counted (n - 1) ep
+
 -- Captures a `b` and `c` value separated by an `a` value and returns (`b`, `c`)
 between :: EParser a -> EParser b -> EParser c -> EParser (b, c)
 between separator ep = (ep <* separator) |:: (,)
@@ -236,14 +240,11 @@ tab = char '\t'
 spaces :: EParser String
 spaces = repeated (space <|> tab)
 
-nl :: EParser Char
-nl = char '\n'
-
 crNL :: EParser String
 crNL = exact "\r\n"
 
 newLine :: EParser Char
-newLine = nl <|> (crNL >> result '\n')
+newLine = char '\n'
 
 notNewLine :: EParser Char
 notNewLine = notChar '\n'
