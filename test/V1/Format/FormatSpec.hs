@@ -1,4 +1,4 @@
-module FormatSpec (spec) where
+module Format.FormatSpec (spec) where
 
 import Mparse.Format
 import Test.Hspec

@@ -1,0 +1,21 @@
+----------Profile----------
+Name: John Doe
+Age: 45
+Address: 123 Fake St, Vancouver, BC, VKX 459, Canada
+Phone Number: 566-859-4151
+Occupation: Ditch Digger
+
+
+----------Profile----------
+Name: Anakin Skywalker
+Age: 23
+Address: 1 Republic Ave, First Level, First Sector, A8S 5W9, Coruscant
+Phone Number: 998-462-1352
+Occupation: Jedi Knight
+
+----------Profile----------
+Name: Jane Doe
+Age: 34
+Address: 56 Somewhere Blvd, Toronto, ON, M8S 3A2, Canada
+Phone Number: 234-758-3165
+Occupation: Dentist

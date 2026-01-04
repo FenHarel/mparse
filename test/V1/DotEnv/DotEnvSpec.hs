@@ -1,13 +1,16 @@
-module DotEnvSpec (spec) where
+module DotEnv.DotEnvSpec (spec) where
 
 import Mparse.DotEnv
 import Test.Hspec
+
+testFilePath :: String
+testFilePath = "test/V1/DotEnv/test.env"
 
 spec :: Spec
 spec = do
   describe "dotenv parser tests" $ do
     it "parsedFile" $ do
-      result <- parsedDotEnvDebug "test/test.env"
+      result <- parsedDotEnvDebug testFilePath
       shouldBe
         result
         [ ("_some_var", "123This_is-my!#$VAR"),
