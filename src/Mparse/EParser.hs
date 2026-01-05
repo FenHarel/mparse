@@ -11,6 +11,7 @@ type Position = Int
 -- always increment acp
 -- when consuming newline -> reset rcp to 0
 -- when incrementing rcp from 0 -> 1, increment line number
+
 type LinePosition = (Int, Int, Int)
 
 type InputPosition = (String, LinePosition)
@@ -190,6 +191,9 @@ ep |: ep' = combine (:) ep ep'
 (|::) :: EParser a -> (a -> b -> c) -> (EParser b -> EParser c)
 ep |:: f = combine f ep
 
+(|:|) :: EParser a -> EParser b -> EParser (a, b)
+ep |:| ep' = combine (,) ep ep'
+
 -- Captures `0..n` `a` values and collects them in a list
 repeated :: EParser a -> EParser [a]
 repeated ep = (ep |: (repeated ep)) <|> result []
@@ -210,8 +214,8 @@ counted 0 _ = result []
 counted n ep = ep |: counted (n - 1) ep
 
 -- Captures a `b` and `c` value separated by an `a` value and returns (`b`, `c`)
-between :: EParser a -> EParser b -> EParser c -> EParser (b, c)
-between separator ep = (ep <* separator) |:: (,)
+pairOn :: EParser a -> EParser b -> EParser c -> EParser (b, c)
+pairOn separator ep = (ep <* separator) |:: (,)
 
 -- Attempts to capture an `a` value otherwise returns a default
 defaults :: a -> EParser a -> EParser a
@@ -222,8 +226,23 @@ optional :: EParser a -> EParser (Maybe a)
 optional ep = (Just <$> ep) <|> result Nothing
 
 -- Captures a `c` value that is bracketed by an `a` value and a `b` value
-bracket :: EParser a -> EParser b -> EParser c -> EParser c
-bracket open close ep = open >> ep <* close
+between :: EParser a -> EParser b -> EParser c -> EParser c
+between open close ep = open >> ep <* close
+
+parenthesized :: EParser a -> EParser a
+parenthesized = between (char '(') (char ')')
+
+braced :: EParser a -> EParser a
+braced = between (char '{') (char '}')
+
+bracketed :: EParser a -> EParser a
+bracketed = between (char '[') (char ']')
+
+dQuoted :: EParser a -> EParser a
+dQuoted = between (char '"') (char '"')
+
+sQuoted :: EParser a -> EParser a
+sQuoted = between (char '\'') (char '\'')
 
 -- Captures a positive integer of any length
 nat :: EParser Int

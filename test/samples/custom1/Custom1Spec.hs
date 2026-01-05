@@ -17,7 +17,7 @@ _dash :: EP.EParser Char
 _dash = EP.char '-'
 
 profileHeader :: EP.EParser String
-profileHeader = EP.bracket _dashes _dashes _profile
+profileHeader = EP.between _dashes _dashes _profile
   where
     _dashes :: EP.EParser String
     _dashes = EP.counted 10 _dash

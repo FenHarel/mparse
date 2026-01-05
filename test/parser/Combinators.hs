@@ -27,12 +27,12 @@ spec = do
       EP.parseResults (EP.char 'a' <|> EP.char 'b') "bcd" `shouldBe` [EP.Success ('b', ("cd", (0, 1, 1)))]
       EP.parseResults (EP.char 'a' <|> EP.char 'b') "xyz" `shouldBe` [EP.Failure (EP.RootError ("Received character: 'x'", (0, 1, 1)))]
 
-    it "between parses values separated by another parser" $ do
-      EP.parseResults (EP.between (EP.char '=') (EP.repeated1 EP.letter) EP.nat) "name=42" `shouldBe` [EP.Success (("name", 42), ("", (0, 7, 7)))]
+    it "pairOn parses values separated by another parser" $ do
+      EP.parseResults (EP.pairOn (EP.char '=') (EP.repeated1 EP.letter) EP.nat) "name=42" `shouldBe` [EP.Success (("name", 42), ("", (0, 7, 7)))]
 
     it "sepby parses items separated by a delimiter" $ do
       EP.parseResults (EP.digit // EP.char ',') "1,2,3" `shouldBe` [EP.Success (['1', '2', '3'], ("", (0, 5, 5)))]
       EP.parseResults (EP.digit // EP.char ',') "1" `shouldBe` [EP.Success (['1'], ("", (0, 1, 1)))]
 
-    it "bracket parses content between delimiters" $ do
-      EP.parseResults (EP.bracket (EP.char '(') (EP.char ')') (EP.repeated1 EP.letter)) "(abc)" `shouldBe` [EP.Success ("abc", ("", (0, 5, 5)))]
+    it "between parses content between delimiters" $ do
+      EP.parseResults (EP.between (EP.char '(') (EP.char ')') (EP.repeated1 EP.letter)) "(abc)" `shouldBe` [EP.Success ("abc", ("", (0, 5, 5)))]
