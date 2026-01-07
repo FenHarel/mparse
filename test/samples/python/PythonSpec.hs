@@ -1,9 +1,23 @@
 module PythonSpec (spec) where
 
 import Control.Applicative (Alternative ((<|>)))
-import Mparse.EParser ((//), (:|), (|:|))
-import qualified Mparse.EParser as EP
+import Mparse.GeneralParser ((//), (|:), (|:|))
+import qualified Mparse.GeneralParser as GP
 import Test.Hspec
+
+type Location = (Int, Int, Int)
+
+data ParseLocation = ParseLocation Location deriving (Show, Eq)
+
+instance GP.ParseState ParseLocation where
+  initialState = ParseLocation (0, 0, 0)
+  consumeCharacter '\n' (ParseLocation (lcp, _, acp)) = ParseLocation (lcp + 1, 0, acp + 1)
+  consumeCharacter _ (ParseLocation (lcp, rcp, acp)) = ParseLocation (lcp, rcp + 1, acp + 1)
+
+type PyParser = GP.GeneralParser ParseLocation
+
+pyparse :: PyParser a -> String -> GP.GeneralParsedData a [String]
+pyparse = GP.parsed
 
 type Alias = String
 
@@ -45,142 +59,142 @@ data Grammar
 
 data Scope = Scope [Grammar] deriving (Show, Eq)
 
-name' :: EP.EParser String
-name' = EP.repeated1 EP.alpha
+name' :: PyParser String
+name' = validName
   where
-    validName = EP.letter |: EP.repeated EP.alpha
+    validName = GP.letter |: GP.repeated GP.alpha
 
-value' :: EP.EParser Value
+value' :: PyParser Value
 value' = _val
   where
     _val = optionallyParenthesized $ (exprCombine' value' value' <|> _primitive)
-    _list = ListLiteral <$> EP.bracketed (value' // (EP.token (EP.char ',')))
-    _string = StringLiteral <$> EP.between (EP.char '"') (EP.char '"') (EP.repeated (EP.notChar '"'))
-    _integer = IntegerLiteral <$> EP.nat
+    _list = ListLiteral <$> GP.bracketed (value' // (GP.token (GP.char ',')))
+    _string = StringLiteral <$> GP.between (GP.char '"') (GP.char '"') (GP.repeated (GP.notChar '"'))
+    _integer = IntegerLiteral <$> GP.nat
     _var = Variable <$> name'
     _primitive = _list <|> _string <|> _integer <|> _var
-    _ops :: EP.EParser Value -> EP.EParser Value -> EP.EParser Value
+    _ops :: PyParser Value -> PyParser Value -> PyParser Value
     _ops ep ep' =
       ep `_plus` ep'
         <|> ep `_sub` ep'
         <|> ep `_mult` ep'
         <|> ep `_div` ep'
       where
-        _op :: Op -> EP.EParser a -> EP.EParser Value -> EP.EParser Value -> EP.EParser Value
-        _op op' ep'' v v' = uncurry (Expr op') <$> EP.pairOn ep'' (EP.token v) v'
+        _op :: Op -> PyParser a -> PyParser Value -> PyParser Value -> PyParser Value
+        _op op' ep'' v v' = uncurry (Expr op') <$> GP.pairOn ep'' (GP.token v) v'
         _plus = Plus `_op` _PLUS
         _sub = Sub `_op` _SUB
         _mult = Mult `_op` _MULT
         _div = Div `_op` _DIV
-    opChar :: EP.EParser Op
+    opChar :: PyParser Op
     opChar =
       (const Plus <$> _PLUS)
         <|> (const Sub <$> _SUB)
         <|> (const Mult <$> _MULT)
         <|> (const Div <$> _DIV)
-    exprCombine' :: EP.EParser Value -> EP.EParser Value -> EP.EParser Value
+    exprCombine' :: PyParser Value -> PyParser Value -> PyParser Value
     exprCombine' ep ep' = do
-      v <- EP.token ep
+      v <- GP.token ep
       op <- opChar
-      v' <- EP.token ep'
+      v' <- GP.token ep'
       pure $ Expr op v v'
-    optionallyParenthesized :: EP.EParser a -> EP.EParser a
-    optionallyParenthesized ep = (EP.parenthesized ep) <|> ep
+    optionallyParenthesized :: PyParser a -> PyParser a
+    optionallyParenthesized ep = (GP.parenthesized ep) <|> ep
 
-assignment' :: EP.EParser Grammar
+assignment' :: PyParser Grammar
 assignment' = uncurry Assignment <$> name' `equals'` value'
   where
-    equals' = EP.pairOn _ASSIGN . EP.token
+    equals' = GP.pairOn _ASSIGN . GP.token
 
-import' :: EP.EParser Grammar
+import' :: PyParser Grammar
 import' =
   aliasedAbsoluteImport
     <|> absoluteImport
     <|> aliasedRelativeImport
     <|> relativeImport
   where
-    importModule' :: EP.EParser String
+    importModule' :: PyParser String
     importModule' = _IMPORT >> name'
-    fromModule' :: EP.EParser String
+    fromModule' :: PyParser String
     fromModule' = _FROM >> name'
-    alias' :: EP.EParser String
+    alias' :: PyParser String
     alias' = _AS >> name'
-    relativeImportModule' :: EP.EParser (String, String)
-    relativeImportModule' = (EP.token fromModule') |:| importModule'
+    relativeImportModule' :: PyParser (String, String)
+    relativeImportModule' = (GP.token fromModule') |:| importModule'
     absoluteImport = AbsoluteImport <$> importModule'
-    aliasedAbsoluteImport = AliasedAbsoluteImport <$> (EP.token importModule') <*> alias'
-    relativeImport = RelativeImport <$> (EP.token relativeImportModule')
-    aliasedRelativeImport = AliasedRelativeImport <$> (EP.token relativeImportModule') <*> alias'
+    aliasedAbsoluteImport = AliasedAbsoluteImport <$> (GP.token importModule') <*> alias'
+    relativeImport = RelativeImport <$> (GP.token relativeImportModule')
+    aliasedRelativeImport = AliasedRelativeImport <$> (GP.token relativeImportModule') <*> alias'
 
-indent :: Int -> EP.EParser String
-indent sc = EP.counted (4 * sc) EP.space
+indent :: Int -> PyParser String
+indent sc = GP.counted (4 * sc) GP.space
 
-blankLine :: EP.EParser Grammar
-blankLine = const BlankLine <$> EP.newLine
+blankLine :: PyParser Grammar
+blankLine = const BlankLine <$> GP.newLine
 
-functionApplication :: EP.EParser Grammar
+functionApplication :: PyParser Grammar
 functionApplication =
   FunctionApplication
     <$> name'
     <*> params'
   where
-    params' :: EP.EParser [Value]
-    params' = EP.parenthesized (value' // (EP.char ',' <* EP.spaces))
+    params' :: PyParser [Value]
+    params' = GP.parenthesized (value' // (GP.char ',' <* GP.spaces))
 
-_PLUS :: EP.EParser Op
-_PLUS = const Plus <$> (EP.token . EP.char $ '+')
+_PLUS :: PyParser Op
+_PLUS = const Plus <$> (GP.token . GP.char $ '+')
 
-_SUB :: EP.EParser Op
-_SUB = const Sub <$> (EP.token . EP.char $ '-')
+_SUB :: PyParser Op
+_SUB = const Sub <$> (GP.token . GP.char $ '-')
 
-_MULT :: EP.EParser Op
-_MULT = const Mult <$> (EP.token . EP.char $ '*')
+_MULT :: PyParser Op
+_MULT = const Mult <$> (GP.token . GP.char $ '*')
 
-_DIV :: EP.EParser Op
-_DIV = const Div <$> (EP.token . EP.char $ '/')
+_DIV :: PyParser Op
+_DIV = const Div <$> (GP.token . GP.char $ '/')
 
-_ASSIGN :: EP.EParser Op
-_ASSIGN = const Assign <$> (EP.token $ EP.char '=')
+_ASSIGN :: PyParser Op
+_ASSIGN = const Assign <$> (GP.token $ GP.char '=')
 
-_DEF :: EP.EParser String
-_DEF = EP.token . EP.exact $ "def"
+_DEF :: PyParser String
+_DEF = GP.token . GP.exact $ "def"
 
-_COLON :: EP.EParser Char
-_COLON = EP.token . EP.char $ ':'
+_COLON :: PyParser Char
+_COLON = GP.token . GP.char $ ':'
 
-_AS :: EP.EParser String
-_AS = EP.token . EP.exact $ "as"
+_AS :: PyParser String
+_AS = GP.token . GP.exact $ "as"
 
-_IMPORT :: EP.EParser String
-_IMPORT = EP.token . EP.exact $ "import"
+_IMPORT :: PyParser String
+_IMPORT = GP.token . GP.exact $ "import"
 
-_FROM :: EP.EParser String
-_FROM = EP.token . EP.exact $ "from"
+_FROM :: PyParser String
+_FROM = GP.token . GP.exact $ "from"
 
-_FOR :: EP.EParser String
-_FOR = EP.token . EP.exact $ "for"
+_FOR :: PyParser String
+_FOR = GP.token . GP.exact $ "for"
 
-_WHILE :: EP.EParser String
-_WHILE = EP.token . EP.exact $ "while"
+_WHILE :: PyParser String
+_WHILE = GP.token . GP.exact $ "while"
 
-_IN :: EP.EParser String
-_IN = EP.token . EP.exact $ "in"
+_IN :: PyParser String
+_IN = GP.token . GP.exact $ "in"
 
-functionDefinition :: Int -> EP.EParser Grammar
+functionDefinition :: Int -> PyParser Grammar
 functionDefinition n = definition' <*> scope (n + 1)
   where
-    arguments' :: EP.EParser [Argument]
-    arguments' = EP.parenthesized (name' // (EP.char ',' <* EP.spaces))
-    signature' :: EP.EParser (Scope -> Grammar)
+    arguments' :: PyParser [Argument]
+    arguments' = GP.parenthesized (name' // (GP.char ',' <* GP.spaces))
+    signature' :: PyParser (Scope -> Grammar)
     signature' = FunctionDefinition <$> name' <*> arguments'
-    definition' :: EP.EParser (Scope -> Grammar)
-    definition' = EP.between _DEF (_COLON <* EP.newLine) signature'
+    definition' :: PyParser (Scope -> Grammar)
+    definition' = GP.between _DEF (_COLON <* GP.newLine) signature'
 
-scope :: Int -> EP.EParser Scope
-scope n = Scope <$> EP.repeated1 (indent n >> inner')
+scope :: Int -> PyParser Scope
+scope n = Scope <$> GP.repeated1 (indent n >> inner')
   where
-    line' ep = EP.token ep <* EP.newLine
-    inner' :: EP.EParser Grammar
+    line' ep = GP.token ep <* GP.newLine
+    inner' :: PyParser Grammar
     inner' =
       (line' import')
         <|> (line' assignment')
@@ -188,8 +202,8 @@ scope n = Scope <$> EP.repeated1 (indent n >> inner')
         <|> functionDefinition n
         <|> blankLine
 
-parsepy :: String -> EP.ParsedData Scope
-parsepy = EP.parsed (scope 0)
+parsepy :: String -> GP.GeneralParsedData Scope [String]
+parsepy = pyparse (scope 0)
 
 testFilePath :: String
 testFilePath = "test/samples/python/test.py"
@@ -219,7 +233,6 @@ spec = do
   it "python" $ do
     value <- readFile testFilePath
     print value
-
--- let parsed' = parsepy value
--- print parsed'
--- shouldBe parsed' (EP.ParsedData expected')
+    let parsed' = parsepy value
+    print parsed'
+    shouldBe parsed' (GP.ParsedData expected')
