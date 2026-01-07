@@ -1,14 +1,15 @@
 module Optionals (spec) where
 
 import qualified Mparse.EParser as EP
+import qualified Mparse.GeneralParser as GP
 import Test.Hspec
 
 spec :: Spec
 spec = do
   describe "Handlers for failed parses" $ do
     it "optional makes a parser optional" $ do
-      EP.parseResults (EP.optional (EP.char 'a')) "abc" `shouldBe` [EP.Success (Just 'a', ("bc", (0, 1, 1)))]
-      EP.parseResults (EP.optional (EP.char 'a')) "xyz" `shouldBe` [EP.Success (Nothing, ("xyz", (0, 0, 0)))]
+      EP.eparse (GP.optional (GP.char 'a')) "abc" `shouldBe` GP.ParsedData ("bc", (0, 1, 1), Just 'a')
+      EP.eparse (GP.optional (GP.char 'a')) "xyz" `shouldBe` GP.ParsedData ("xyz", (0, 0, 0), Nothing)
     it "defaults returns a default value on failure" $ do
-      EP.parseResults (EP.defaults 'a' (EP.char 'a')) "abc" `shouldBe` [EP.Success ('a', ("bc", (0, 1, 1)))]
-      EP.parseResults (EP.defaults 'a' (EP.char 'a')) "xyz" `shouldBe` [EP.Success ('a', ("xyz", (0, 0, 0)))]
+      EP.eparse (GP.defaults 'a' (GP.char 'a')) "abc" `shouldBe` GP.ParsedData ("bc", (0, 1, 1), 'a')
+      EP.eparse (GP.defaults 'a' (GP.char 'a')) "xyz" `shouldBe` GP.ParsedData ("xyz", (0, 0, 0), 'a')

@@ -1,7 +1,7 @@
 module PythonSpec (spec) where
 
 import Control.Applicative (Alternative ((<|>)))
-import Mparse.EParser ((//), (|:|))
+import Mparse.EParser ((//), (:|), (|:|))
 import qualified Mparse.EParser as EP
 import Test.Hspec
 
@@ -47,10 +47,13 @@ data Scope = Scope [Grammar] deriving (Show, Eq)
 
 name' :: EP.EParser String
 name' = EP.repeated1 EP.alpha
+  where
+    validName = EP.letter |: EP.repeated EP.alpha
 
 value' :: EP.EParser Value
-value' = optionallyParenthesized $ (exprCombine' value' value' <|> _primitive)
+value' = _val
   where
+    _val = optionallyParenthesized $ (exprCombine' value' value' <|> _primitive)
     _list = ListLiteral <$> EP.bracketed (value' // (EP.token (EP.char ',')))
     _string = StringLiteral <$> EP.between (EP.char '"') (EP.char '"') (EP.repeated (EP.notChar '"'))
     _integer = IntegerLiteral <$> EP.nat

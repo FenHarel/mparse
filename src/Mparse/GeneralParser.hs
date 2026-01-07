@@ -5,6 +5,8 @@ import Data.Char (isDigit, isLower, isUpper)
 
 type Input = String
 
+type ErrorMessage = String
+
 data Expectation = None | Expectation String deriving (Show, Eq)
 
 expectations :: (String -> String -> String) -> Expectation -> Expectation -> Expectation
@@ -12,58 +14,59 @@ expectations _ exp' None = exp'
 expectations _ None exp'' = exp''
 expectations f (Expectation s) (Expectation s') = Expectation $ f s s'
 
-class ParsingState a where
+class ParseState a where
   initialState :: a
   consumeCharacter :: Char -> a -> a
 
-class FailState a where
-  unexpectedEndOfInput :: (ParsingState s) => (String, s) -> Maybe a
-  traceError :: (ParsingState s) => Expectation -> (String, s) -> a -> a
-  rootError :: (String, s) -> a
+data (ParseState s) => ParserState s = ParserState (Input, s) deriving (Show, Eq)
 
-data (ParsingState s, FailState f) => GeneralParsingResult s f a = Success (a, (String, s)) | Failure f
+data (ParseState s) => ErrorChain s = Root (ErrorMessage, ParserState s) | Parent (ErrorMessage, ParserState s) (ErrorChain s) deriving (Show, Eq)
 
-succeeded :: (ParsingState s, FailState f) => GeneralParsingResult s f a -> Bool
+errorChain :: (ParseState s) => Expectation -> ParserState s -> ErrorChain s -> ErrorChain s
+errorChain None _ = id
+errorChain (Expectation exp') input = Parent (exp', input)
+
+data (ParseState s) => ParseResult s a = Success (a, ParserState s) | Failure (ErrorChain s) deriving (Show, Eq)
+
+succeeded :: (ParseState s) => ParseResult s a -> Bool
 succeeded (Success _) = True
 succeeded _ = False
 
-someSucceeded :: (ParsingState s, FailState f) => [GeneralParsingResult s f a] -> Bool
+someSucceeded :: (ParseState s) => [ParseResult s a] -> Bool
 someSucceeded = any succeeded
 
-type GeneralParsingFunction s f a = (Input, s) -> [GeneralParsingResult s f a]
+type GeneralParsingFunction s a = ParserState s -> [ParseResult s a]
 
-data (ParsingState s, FailState f) => GeneralParser s f a = GeneralParser
+data (ParseState s) => GeneralParser s a = GeneralParser
   { expects :: Expectation,
-    parse :: GeneralParsingFunction s f a
+    parse :: GeneralParsingFunction s a
   }
 
-parser :: (ParsingState s, FailState f) => GeneralParsingFunction s f a -> GeneralParser s f a
+parser :: (ParseState s) => GeneralParsingFunction s a -> GeneralParser s a
 parser = GeneralParser None
 
-result :: (ParsingState s, FailState f) => x -> GeneralParser s f x
+result :: (ParseState s) => a -> GeneralParser s a
 result x = parser (\s -> [Success (x, s)])
 
-zero :: (ParsingState s, FailState f) => GeneralParser s f a
+zero :: (ParseState s) => GeneralParser s a
 zero = parser $ const []
 
-item :: (ParsingState s, FailState f) => GeneralParser s f Char
+item :: (ParseState s) => GeneralParser s Char
 item = parser parseChar
   where
-    parseChar :: (ParsingState s, FailState f) => GeneralParsingFunction s f Char
-    parseChar ([], s) = case unexpectedEndOfInput ([], s) of
-      Just f -> [Failure f]
-      Nothing -> []
-    parseChar ((x : xs), s) = [Success (x, (xs, s'))]
+    parseChar :: (ParseState s) => GeneralParsingFunction s Char
+    parseChar (ParserState ([], s)) = [Failure . Root $ ("Unexpected end of input", (ParserState ([], s)))]
+    parseChar (ParserState ((x : xs), s)) = [Success (x, ParserState (xs, s'))]
       where
         s' = consumeCharacter x s
 
-instance (ParsingState s, FailState f) => Functor (GeneralParser s f) where
+instance (ParseState s) => Functor (GeneralParser s) where
   fmap f ep = GeneralParser (expects ep) (fmap mapper . parse ep)
     where
       mapper (Success (a, s)) = Success $ (f a, s)
       mapper (Failure et) = Failure $ et
 
-instance (ParsingState s, FailState f) => Applicative (GeneralParser s f) where
+instance (ParseState s) => Applicative (GeneralParser s) where
   pure = result
   ep <*> ep' = GeneralParser exp' parse'
     where
@@ -74,24 +77,24 @@ instance (ParsingState s, FailState f) => Applicative (GeneralParser s f) where
       parse' input = do
         epr <- parse ep input
         case epr of
-          (Failure et') -> pure $ Failure $ traceError fexp input et'
+          (Failure et') -> pure . Failure $ errorChain fexp input et'
           (Success (f, input')) -> do
             epr' <- parse ep' input'
             case epr' of
-              (Failure et') -> pure $ Failure $ traceError sexp input' et'
-              (Success (a, input'')) -> pure $ Success (f a, input'')
+              (Failure et') -> pure . Failure $ errorChain sexp input' et'
+              (Success (a, input'')) -> pure . Success $ (f a, input'')
 
-instance (ParsingState s, FailState f) => Monad (GeneralParser s f) where
+instance (ParseState s) => Monad (GeneralParser s) where
   (GeneralParser exp' parse') >>= f = GeneralParser exp' $
     \input ->
       concat
         [ case pr of
-            (Failure et) -> [Failure $ traceError exp' input et]
+            (Failure et) -> [Failure $ errorChain exp' input et]
             (Success (a, input')) -> parse (f a) input'
         | pr <- parse' input
         ]
 
-instance (ParsingState s, FailState f) => Alternative (GeneralParser s f) where
+instance (ParseState s) => Alternative (GeneralParser s) where
   empty = zero
   (GeneralParser exp' parse') <|> (GeneralParser exp'' parse'') = GeneralParser exp''' alternative
     where
@@ -105,167 +108,204 @@ instance (ParsingState s, FailState f) => Alternative (GeneralParser s f) where
           secondParse = parse'' input
 
 -- Adds an expectation to a parser
-expect :: (ParsingState s, FailState f) => String -> GeneralParser s f a -> GeneralParser s f a
+expect :: (ParseState s) => String -> GeneralParser s a -> GeneralParser s a
 expect [] ep = ep
-expect exp' (GeneralParser _ parse') = (GeneralParser (Expectation exp') parse')
+expect exp' (GeneralParser _ parse') = GeneralParser (Expectation exp') parse'
 
 -- Consumes a character if it satisfies the given predicate
-sat :: (ParsingState s, FailState f) => (Char -> Bool) -> GeneralParser s f Char
+sat :: (ParseState s) => (Char -> Bool) -> GeneralParser s Char
 sat predicate = item >>= evaluate'
   where
-    evaluate' :: (ParsingState s, FailState f) => Char -> GeneralParser s f Char
+    evaluate' :: (ParseState s) => Char -> GeneralParser s Char
     evaluate' c'
       | predicate c' = result c'
-      | otherwise = parser $ \(_, p) -> [Failure (rootError (("Received character: '" ++ [c'] ++ "'"), p))]
+      | otherwise = parser $ \input -> [Failure . Root $ (("Received character: '" ++ [c'] ++ "'"), input)]
 
 -- Consumes a specific character
-char :: (ParsingState s, FailState f) => Char -> GeneralParser s f Char
+char :: (ParseState s) => Char -> GeneralParser s Char
 char c = sat (== c)
 
 -- Consumes a character if it is not equal to the given character
-notChar :: (ParsingState s, FailState f) => Char -> GeneralParser s f Char
+notChar :: (ParseState s) => Char -> GeneralParser s Char
 notChar c = sat (/= c)
 
 -- Consumes a numeric character
-digit :: (ParsingState s, FailState f) => GeneralParser s f Char
+digit :: (ParseState s) => GeneralParser s Char
 digit = sat isDigit
 
 -- Consumes a lowercase letter
-lower :: (ParsingState s, FailState f) => GeneralParser s f Char
+lower :: (ParseState s) => GeneralParser s Char
 lower = sat isLower
 
 -- Consumes an uppercase letter
-upper :: (ParsingState s, FailState f) => GeneralParser s f Char
+upper :: (ParseState s) => GeneralParser s Char
 upper = sat isUpper
 
 -- Consumes an alphabetical character
-letter :: (ParsingState s, FailState f) => GeneralParser s f Char
+letter :: (ParseState s) => GeneralParser s Char
 letter = lower <|> upper
 
 -- Consumes am alphanumeric character
-alpha :: (ParsingState s, FailState f) => GeneralParser s f Char
+alpha :: (ParseState s) => GeneralParser s Char
 alpha = letter <|> digit
 
 -- Consumes a specific string
-exact :: (ParsingState s, FailState f) => String -> GeneralParser s f String
+exact :: (ParseState s) => String -> GeneralParser s String
 exact "" = result ""
 exact s = expect exp' $ ext' s
   where
     exp' = "Expected the string: '" ++ s ++ "'"
-    ext' :: (ParsingState s, FailState f) => String -> GeneralParser s f String
+    ext' :: (ParseState s) => String -> GeneralParser s String
     ext' "" = result ""
     ext' (x : xs) = char x >> ext' xs >> result (x : xs)
 
 -- Parser combinator primitives
 
 -- Applies two parsers and combines their results with a combinator function
-combine :: (ParsingState s, FailState f) => (a -> b -> c) -> GeneralParser s f a -> GeneralParser s f b -> GeneralParser s f c
+combine :: (ParseState s) => (a -> b -> c) -> GeneralParser s a -> GeneralParser s b -> GeneralParser s c
 combine f ep ep' = do
   x <- ep
   xs <- ep'
   pure $ f x xs
 
-(|:) :: (ParsingState s, FailState f) => GeneralParser s f a -> GeneralParser s f [a] -> GeneralParser s f [a]
+(|:) :: (ParseState s) => GeneralParser s a -> GeneralParser s [a] -> GeneralParser s [a]
 ep |: ep' = combine (:) ep ep'
 
-(|::) :: (ParsingState s, FailState f) => GeneralParser s f a -> (a -> b -> c) -> (GeneralParser s f b -> GeneralParser s f c)
+(|::) :: (ParseState s) => GeneralParser s a -> (a -> b -> c) -> (GeneralParser s b -> GeneralParser s c)
 ep |:: f = combine f ep
 
-(|:|) :: (ParsingState s, FailState f) => GeneralParser s f a -> GeneralParser s f b -> GeneralParser s f (a, b)
+(|:|) :: (ParseState s) => GeneralParser s a -> GeneralParser s b -> GeneralParser s (a, b)
 ep |:| ep' = combine (,) ep ep'
 
 -- Captures `0..n` `a` values and collects them in a list
-repeated :: (ParsingState s, FailState f) => GeneralParser s f a -> GeneralParser s f [a]
+repeated :: (ParseState s) => GeneralParser s a -> GeneralParser s [a]
 repeated ep = (ep |: (repeated ep)) <|> result []
 
 -- Captures `0..n` `a` values and collects them in a list
-repeated1 :: (ParsingState s, FailState f) => GeneralParser s f a -> GeneralParser s f [a]
+repeated1 :: (ParseState s) => GeneralParser s a -> GeneralParser s [a]
 repeated1 ep = (ep |: (repeated ep))
 
 -- Captures `1..n` `a` values separated by b values
-sepBy :: (ParsingState s, FailState f) => GeneralParser s f a -> GeneralParser s f b -> GeneralParser s f [a]
+sepBy :: (ParseState s) => GeneralParser s a -> GeneralParser s b -> GeneralParser s [a]
 sepBy ep separator = ep |: (repeated (separator >> ep))
 
-(//) :: (ParsingState s, FailState f) => GeneralParser s f a -> GeneralParser s f b -> GeneralParser s f [a]
+(//) :: (ParseState s) => GeneralParser s a -> GeneralParser s b -> GeneralParser s [a]
 ep // ep' = sepBy ep ep'
 
-counted :: (ParsingState s, FailState f) => Int -> GeneralParser s f a -> GeneralParser s f [a]
+counted :: (ParseState s) => Int -> GeneralParser s a -> GeneralParser s [a]
 counted 0 _ = result []
 counted n ep = ep |: counted (n - 1) ep
 
 -- Captures a `b` and `c` value separated by an `a` value and returns (`b`, `c`)
-pairOn :: (ParsingState s, FailState f) => GeneralParser s f a -> GeneralParser s f b -> GeneralParser s f c -> GeneralParser s f (b, c)
+pairOn :: (ParseState s) => GeneralParser s a -> GeneralParser s b -> GeneralParser s c -> GeneralParser s (b, c)
 pairOn separator ep = (ep <* separator) |:: (,)
 
 -- Attempts to capture an `a` value otherwise returns a default
-defaults :: (ParsingState s, FailState f) => a -> GeneralParser s f a -> GeneralParser s f a
+defaults :: (ParseState s) => a -> GeneralParser s a -> GeneralParser s a
 defaults d ep = ep <|> result d
 
 -- Attempts to capture an `a` value otherwise returns Nothing
-optional :: (ParsingState s, FailState f) => GeneralParser s f a -> GeneralParser s f (Maybe a)
+optional :: (ParseState s) => GeneralParser s a -> GeneralParser s (Maybe a)
 optional ep = (Just <$> ep) <|> result Nothing
 
 -- Captures a `c` value that is bracketed by an `a` value and a `b` value
-between :: (ParsingState s, FailState f) => GeneralParser s f a -> GeneralParser s f b -> GeneralParser s f c -> GeneralParser s f c
+between :: (ParseState s) => GeneralParser s a -> GeneralParser s b -> GeneralParser s c -> GeneralParser s c
 between open close ep = open >> ep <* close
 
-parenthesized :: (ParsingState s, FailState f) => GeneralParser s f a -> GeneralParser s f a
+parenthesized :: (ParseState s) => GeneralParser s a -> GeneralParser s a
 parenthesized = between (char '(') (char ')')
 
-braced :: (ParsingState s, FailState f) => GeneralParser s f a -> GeneralParser s f a
+braced :: (ParseState s) => GeneralParser s a -> GeneralParser s a
 braced = between (char '{') (char '}')
 
-bracketed :: (ParsingState s, FailState f) => GeneralParser s f a -> GeneralParser s f a
+bracketed :: (ParseState s) => GeneralParser s a -> GeneralParser s a
 bracketed = between (char '[') (char ']')
 
-dQuoted :: (ParsingState s, FailState f) => GeneralParser s f a -> GeneralParser s f a
+dQuoted :: (ParseState s) => GeneralParser s a -> GeneralParser s a
 dQuoted = between (char '"') (char '"')
 
-sQuoted :: (ParsingState s, FailState f) => GeneralParser s f a -> GeneralParser s f a
+sQuoted :: (ParseState s) => GeneralParser s a -> GeneralParser s a
 sQuoted = between (char '\'') (char '\'')
 
 -- Captures a positive integer of any length
-nat :: (ParsingState s, FailState f) => GeneralParser s f Int
+nat :: (ParseState s) => GeneralParser s Int
 nat = expect exp' $ read <$> repeated1 digit
   where
     exp' = "Expected numeric characters"
 
-space :: (ParsingState s, FailState f) => GeneralParser s f Char
+space :: (ParseState s) => GeneralParser s Char
 space = char ' '
 
-tab :: (ParsingState s, FailState f) => GeneralParser s f Char
+tab :: (ParseState s) => GeneralParser s Char
 tab = char '\t'
 
-spaces :: (ParsingState s, FailState f) => GeneralParser s f String
+spaces :: (ParseState s) => GeneralParser s String
 spaces = repeated (space <|> tab)
 
-crNL :: (ParsingState s, FailState f) => GeneralParser s f String
+crNL :: (ParseState s) => GeneralParser s String
 crNL = exact "\r\n"
 
-newLine :: (ParsingState s, FailState f) => GeneralParser s f Char
+newLine :: (ParseState s) => GeneralParser s Char
 newLine = char '\n'
 
-notNewLine :: (ParsingState s, FailState f) => GeneralParser s f Char
+notNewLine :: (ParseState s) => GeneralParser s Char
 notNewLine = notChar '\n'
 
-spacesNL :: (ParsingState s, FailState f) => GeneralParser s f String
+spacesNL :: (ParseState s) => GeneralParser s String
 spacesNL = repeated (space <|> tab <|> newLine)
 
-token :: (ParsingState s, FailState f) => GeneralParser s f a -> GeneralParser s f a
+token :: (ParseState s) => GeneralParser s a -> GeneralParser s a
 token ep = ep <* spaces
 
-parseResults :: (ParsingState s, FailState f) => GeneralParser s f a -> String -> [GeneralParsingResult s f a]
-parseResults (GeneralParser exp' parse') input = map trace'' . parse' $ zeroState
+data GeneralParsedData d e = ParsedData d | NoData | ParserError e deriving (Show, Eq)
+
+type RichParsedData a s = GeneralParsedData (Input, s, a) [(Input, s, ErrorMessage)]
+
+_results' :: (ParseState s) => GeneralParser s a -> String -> [ParseResult s a]
+_results' (GeneralParser exp' parse') input = map trace'' . parse' $ zeroState
   where
-    zeroState = (input, initialState)
-    trace'' :: (ParsingState s, FailState f) => GeneralParsingResult s f a -> GeneralParsingResult s f a
-    trace'' (Failure et) = Failure $ traceError exp' zeroState et
+    zeroState = ParserState (input, initialState)
+    trace'' (Failure et) = Failure $ errorChain exp' zeroState et
     trace'' s = s
 
-data (FailState f) => ParsedData a f = ParsedData a | NoData | ParserError f deriving (Show, Eq)
-
-parsed :: (ParsingState s, FailState f) => GeneralParser s f a -> String -> ParsedData a f
-parsed ep input = case parseResults ep input of
+parsedResults :: (ParseState s) => GeneralParser s a -> String -> RichParsedData a s
+parsedResults ep input = case _results' ep input of
   [] -> NoData
-  ((Success (a, _)) : _) -> ParsedData a
-  ((Failure et) : _) -> ParserError et
+  ((Success (a, ParserState (input', s))) : _) -> ParsedData (input', s, a)
+  ((Failure et : _)) -> ParserError . simplify' $ et
+    where
+      simplify' (Root (msg, ParserState (input', s))) = [(input', s, msg)]
+      simplify' (Parent (msg, ParserState (input', s)) et') = (input', s, msg) : simplify' et'
+
+type SuccessFormatFunction s a d = (Input, s, a) -> d
+
+type ErrorFormatFunction s e = [(Input, s, ErrorMessage)] -> e
+
+parsedWithFormat ::
+  (ParseState s) =>
+  (SuccessFormatFunction s a d) ->
+  (ErrorFormatFunction s e) ->
+  GeneralParser s a ->
+  String ->
+  GeneralParsedData d e
+parsedWithFormat sf ef ep input = case parsedResults ep input of
+  NoData -> NoData
+  ParsedData d -> ParsedData . sf $ d
+  ParserError e -> ParserError . ef $ e
+
+parsed :: (ParseState s) => GeneralParser s a -> String -> GeneralParsedData a [ErrorMessage]
+parsed = parsedWithFormat onlyData onlyError
+  where
+    onlyError :: ErrorFormatFunction s [ErrorMessage]
+    onlyError = map (\(_, _, xs) -> xs)
+    onlyData :: SuccessFormatFunction s a a
+    onlyData (_, _, a) = a
+
+parsedWithErrors :: (ParseState s) => GeneralParser s a -> String -> GeneralParsedData a [(Input, s, ErrorMessage)]
+parsedWithErrors = parsedWithFormat onlyData id
+  where
+    onlyData :: SuccessFormatFunction s a a
+    onlyData (_, _, a) = a
+
+parsedDebug :: (ParseState s) => GeneralParser s a -> String -> RichParsedData a s
+parsedDebug = parsedWithFormat id id
