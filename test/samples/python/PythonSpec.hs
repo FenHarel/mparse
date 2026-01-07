@@ -1,7 +1,7 @@
 module PythonSpec (spec) where
 
 import Control.Applicative (Alternative ((<|>)))
-import Mparse.GeneralParser ((//), (|:), (|:|))
+import Mparse.GeneralParser ((//), (<<|), (|:), (|:|))
 import qualified Mparse.GeneralParser as GP
 import Test.Hspec
 
@@ -43,6 +43,7 @@ data Value
   | IntegerLiteral Int
   | Variable String
   | ListLiteral [Value]
+  | FunctionEvaluation FunctionName [Value]
   | Expr Op Value Value
   deriving (Show, Eq)
 
@@ -65,41 +66,53 @@ name' = validName
     validName = GP.letter |: GP.repeated GP.alpha
 
 value' :: PyParser Value
-value' = _val
+value' = do
+  term' <- term
+  expr' term' <|> pure term'
   where
-    _val = optionallyParenthesized $ (exprCombine' value' value' <|> _primitive)
-    _list = ListLiteral <$> GP.bracketed (value' // (GP.token (GP.char ',')))
-    _string = StringLiteral <$> GP.between (GP.char '"') (GP.char '"') (GP.repeated (GP.notChar '"'))
-    _integer = IntegerLiteral <$> GP.nat
-    _var = Variable <$> name'
-    _primitive = _list <|> _string <|> _integer <|> _var
-    _ops :: PyParser Value -> PyParser Value -> PyParser Value
-    _ops ep ep' =
-      ep `_plus` ep'
-        <|> ep `_sub` ep'
-        <|> ep `_mult` ep'
-        <|> ep `_div` ep'
+    term :: PyParser Value
+    term = parenExpr' <|> values'
       where
-        _op :: Op -> PyParser a -> PyParser Value -> PyParser Value -> PyParser Value
-        _op op' ep'' v v' = uncurry (Expr op') <$> GP.pairOn ep'' (GP.token v) v'
-        _plus = Plus `_op` _PLUS
-        _sub = Sub `_op` _SUB
-        _mult = Mult `_op` _MULT
-        _div = Div `_op` _DIV
-    opChar :: PyParser Op
-    opChar =
-      (const Plus <$> _PLUS)
-        <|> (const Sub <$> _SUB)
-        <|> (const Mult <$> _MULT)
-        <|> (const Div <$> _DIV)
-    exprCombine' :: PyParser Value -> PyParser Value -> PyParser Value
-    exprCombine' ep ep' = do
-      v <- GP.token ep
-      op <- opChar
-      v' <- GP.token ep'
-      pure $ Expr op v v'
-    optionallyParenthesized :: PyParser a -> PyParser a
-    optionallyParenthesized ep = (GP.parenthesized ep) <|> ep
+        parenExpr' :: PyParser Value
+        parenExpr' = GP.token $ GP.parenthesized value'
+        values' :: PyParser Value
+        values' = GP.spaces >> GP.token valueTypes'
+          where
+            stringLiteral' = StringLiteral <$> GP.dQuoted (GP.repeated (GP.notChar '"'))
+            integerLiteral = IntegerLiteral <$> GP.nat
+            variable' = Variable <$> name'
+            primitives' :: PyParser Value
+            primitives' = stringLiteral' <|> integerLiteral <|> variable'
+            listLiteral' = ListLiteral <$> GP.bracketed elements'
+              where
+                elements' :: PyParser [Value]
+                elements' = value' // _COMMA
+            functionEvaluation' :: PyParser Value
+            functionEvaluation' =
+              FunctionEvaluation
+                <$> name'
+                <*> params'
+              where
+                params' :: PyParser [Value]
+                params' = GP.parenthesized (value' // _COMMA)
+            recursives' :: PyParser Value
+            recursives' = functionEvaluation' <|> listLiteral'
+            valueTypes' :: PyParser Value
+            valueTypes' = recursives' <|> primitives'
+
+    expr' :: Value -> PyParser Value
+    expr' left' = do
+      op <- operator
+      right' <- term
+      let expression = Expr op left' right'
+      expr' expression <|> pure expression
+      where
+        operator :: PyParser Op
+        operator =
+          (Plus <<| _PLUS)
+            <|> (Sub <<| _SUB)
+            <|> (Mult <<| _MULT)
+            <|> (Div <<| _DIV)
 
 assignment' :: PyParser Grammar
 assignment' = uncurry Assignment <$> name' `equals'` value'
@@ -130,7 +143,7 @@ indent :: Int -> PyParser String
 indent sc = GP.counted (4 * sc) GP.space
 
 blankLine :: PyParser Grammar
-blankLine = const BlankLine <$> GP.newLine
+blankLine = BlankLine <<| GP.newLine
 
 functionApplication :: PyParser Grammar
 functionApplication =
@@ -142,25 +155,28 @@ functionApplication =
     params' = GP.parenthesized (value' // (GP.char ',' <* GP.spaces))
 
 _PLUS :: PyParser Op
-_PLUS = const Plus <$> (GP.token . GP.char $ '+')
+_PLUS = Plus <<| (GP.token . GP.char $ '+')
 
 _SUB :: PyParser Op
-_SUB = const Sub <$> (GP.token . GP.char $ '-')
+_SUB = Sub <<| (GP.token . GP.char $ '-')
 
 _MULT :: PyParser Op
-_MULT = const Mult <$> (GP.token . GP.char $ '*')
+_MULT = Mult <<| (GP.token . GP.char $ '*')
 
 _DIV :: PyParser Op
-_DIV = const Div <$> (GP.token . GP.char $ '/')
+_DIV = Div <<| (GP.token . GP.char $ '/')
 
 _ASSIGN :: PyParser Op
-_ASSIGN = const Assign <$> (GP.token $ GP.char '=')
+_ASSIGN = Assign <<| (GP.token $ GP.char '=')
 
 _DEF :: PyParser String
 _DEF = GP.token . GP.exact $ "def"
 
 _COLON :: PyParser Char
 _COLON = GP.token . GP.char $ ':'
+
+_COMMA :: PyParser Char
+_COMMA = GP.token . GP.char $ ','
 
 _AS :: PyParser String
 _AS = GP.token . GP.exact $ "as"
@@ -222,6 +238,12 @@ expected' =
                 Assignment "x" (StringLiteral "hello"),
                 Assignment "y" (Variable "a"),
                 Assignment "z" (ListLiteral [(IntegerLiteral 4), (StringLiteral "hello"), (Variable "a")]),
+                Assignment "q" (Expr Plus (Expr Mult (Variable "a") (Variable "b")) (Variable "w")),
+                Assignment "q" (Expr Plus (Expr Mult (Variable "a") (Variable "b")) (Variable "w")),
+                Assignment "q" (Expr Mult (Variable "a") (Expr Plus (Variable "b") (Variable "w"))),
+                Assignment "r" (Expr Sub (Expr Plus (Variable "a") (Variable "b")) (Variable "w")),
+                Assignment "s" (Expr Mult (Variable "a") (Expr Div (Variable "b") (Variable "w"))),
+                Assignment "t" (Expr Plus (Variable "a") (FunctionEvaluation "print" [IntegerLiteral 1, Variable "a", StringLiteral "b", ListLiteral [StringLiteral "hello"]])),
                 FunctionApplication "print" [StringLiteral "hello world!"]
               ]
           )

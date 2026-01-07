@@ -257,6 +257,15 @@ spacesNL = repeated (space <|> tab <|> newLine)
 token :: (ParseState s) => GeneralParser s a -> GeneralParser s a
 token ep = ep <* spaces
 
+becomes :: (ParseState s) => GeneralParser s a -> b -> GeneralParser s b
+ep `becomes` b = const b <$> ep
+
+(|>>) :: (ParseState s) => GeneralParser s a -> b -> GeneralParser s b
+ep |>> b = ep `becomes` b
+
+(<<|) :: (ParseState s) => b -> GeneralParser s a -> GeneralParser s b
+b <<| ep = ep |>> b
+
 data GeneralParsedData d e = ParsedData d | NoData | ParserError e deriving (Show, Eq)
 
 type RichParsedData a s = GeneralParsedData (Input, s, a) [(Input, s, ErrorMessage)]
