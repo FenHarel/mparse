@@ -1,6 +1,6 @@
 module Mparse.EParser where
 
-import Mparse.GeneralParser
+import Mparse.MParser
 
 type Location = (Int, Int, Int)
 
@@ -11,7 +11,7 @@ instance ParseState ParseLocation where
   consumeCharacter '\n' (ParseLocation (lcp, _, acp)) = ParseLocation (lcp + 1, 0, acp + 1)
   consumeCharacter _ (ParseLocation (lcp, rcp, acp)) = ParseLocation (lcp, rcp + 1, acp + 1)
 
-type EPParser = GeneralParser ParseLocation
+type EPParser = MParser ParseLocation
 
 eparse :: EPParser a -> String -> RichParsedData a Location
 eparse = parsedWithFormat onlyData onlyError

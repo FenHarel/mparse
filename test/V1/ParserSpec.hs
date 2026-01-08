@@ -1,4 +1,4 @@
-module Parser.ParserSpec (spec) where
+module ParserSpec (spec) where
 
 import Control.Applicative (Alternative ((<|>)))
 import Data.Char (isDigit)

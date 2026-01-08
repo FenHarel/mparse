@@ -1,23 +1,23 @@
 module PythonSpec (spec) where
 
 import Control.Applicative (Alternative ((<|>)))
-import Mparse.GeneralParser ((//), (<<|), (|:), (|:|))
-import qualified Mparse.GeneralParser as GP
+import Mparse.MParser ((//), (<<|), (|:), (|:|))
+import qualified Mparse.MParser as MP
 import Test.Hspec
 
 type Location = (Int, Int, Int)
 
 data ParseLocation = ParseLocation Location deriving (Show, Eq)
 
-instance GP.ParseState ParseLocation where
+instance MP.ParseState ParseLocation where
   initialState = ParseLocation (0, 0, 0)
   consumeCharacter '\n' (ParseLocation (lcp, _, acp)) = ParseLocation (lcp + 1, 0, acp + 1)
   consumeCharacter _ (ParseLocation (lcp, rcp, acp)) = ParseLocation (lcp, rcp + 1, acp + 1)
 
-type PyParser = GP.GeneralParser ParseLocation
+type PyParser = MP.MParser ParseLocation
 
-pyparse :: PyParser a -> String -> GP.GeneralParsedData a [String]
-pyparse = GP.parsed
+pyparse :: PyParser a -> String -> MP.ParsedData a [String]
+pyparse = MP.parsed
 
 type Alias = String
 
@@ -63,7 +63,7 @@ data Scope = Scope [Grammar] deriving (Show, Eq)
 name' :: PyParser String
 name' = validName
   where
-    validName = GP.letter |: GP.repeated GP.alpha
+    validName = MP.letter |: MP.repeated MP.alpha
 
 value' :: PyParser Value
 value' = do
@@ -74,16 +74,16 @@ value' = do
     term = parenExpr' <|> values'
       where
         parenExpr' :: PyParser Value
-        parenExpr' = GP.token $ GP.parenthesized value'
+        parenExpr' = MP.token $ MP.parenthesized value'
         values' :: PyParser Value
-        values' = GP.spaces >> GP.token valueTypes'
+        values' = MP.spaces >> MP.token valueTypes'
           where
-            stringLiteral' = StringLiteral <$> GP.dQuoted (GP.repeated (GP.notChar '"'))
-            integerLiteral = IntegerLiteral <$> GP.nat
+            stringLiteral' = StringLiteral <$> MP.dQuoted (MP.repeated (MP.notChar '"'))
+            integerLiteral = IntegerLiteral <$> MP.nat
             variable' = Variable <$> name'
             primitives' :: PyParser Value
             primitives' = stringLiteral' <|> integerLiteral <|> variable'
-            listLiteral' = ListLiteral <$> GP.bracketed elements'
+            listLiteral' = ListLiteral <$> MP.bracketed elements'
               where
                 elements' :: PyParser [Value]
                 elements' = value' // _COMMA
@@ -94,7 +94,7 @@ value' = do
                 <*> params'
               where
                 params' :: PyParser [Value]
-                params' = GP.parenthesized (value' // _COMMA)
+                params' = MP.parenthesized (value' // _COMMA)
             recursives' :: PyParser Value
             recursives' = functionEvaluation' <|> listLiteral'
             valueTypes' :: PyParser Value
@@ -117,7 +117,7 @@ value' = do
 assignment' :: PyParser Grammar
 assignment' = uncurry Assignment <$> name' `equals'` value'
   where
-    equals' = GP.pairOn _ASSIGN . GP.token
+    equals' = MP.pairOn _ASSIGN . MP.token
 
 import' :: PyParser Grammar
 import' =
@@ -133,17 +133,17 @@ import' =
     alias' :: PyParser String
     alias' = _AS >> name'
     relativeImportModule' :: PyParser (String, String)
-    relativeImportModule' = (GP.token fromModule') |:| importModule'
+    relativeImportModule' = (MP.token fromModule') |:| importModule'
     absoluteImport = AbsoluteImport <$> importModule'
-    aliasedAbsoluteImport = AliasedAbsoluteImport <$> (GP.token importModule') <*> alias'
-    relativeImport = RelativeImport <$> (GP.token relativeImportModule')
-    aliasedRelativeImport = AliasedRelativeImport <$> (GP.token relativeImportModule') <*> alias'
+    aliasedAbsoluteImport = AliasedAbsoluteImport <$> (MP.token importModule') <*> alias'
+    relativeImport = RelativeImport <$> (MP.token relativeImportModule')
+    aliasedRelativeImport = AliasedRelativeImport <$> (MP.token relativeImportModule') <*> alias'
 
 indent :: Int -> PyParser String
-indent sc = GP.counted (4 * sc) GP.space
+indent sc = MP.counted (4 * sc) MP.space
 
 blankLine :: PyParser Grammar
-blankLine = BlankLine <<| GP.newLine
+blankLine = BlankLine <<| MP.newLine
 
 functionApplication :: PyParser Grammar
 functionApplication =
@@ -152,64 +152,64 @@ functionApplication =
     <*> params'
   where
     params' :: PyParser [Value]
-    params' = GP.parenthesized (value' // (GP.char ',' <* GP.spaces))
+    params' = MP.parenthesized (value' // (MP.char ',' <* MP.spaces))
 
 _PLUS :: PyParser Op
-_PLUS = Plus <<| (GP.token . GP.char $ '+')
+_PLUS = Plus <<| (MP.token . MP.char $ '+')
 
 _SUB :: PyParser Op
-_SUB = Sub <<| (GP.token . GP.char $ '-')
+_SUB = Sub <<| (MP.token . MP.char $ '-')
 
 _MULT :: PyParser Op
-_MULT = Mult <<| (GP.token . GP.char $ '*')
+_MULT = Mult <<| (MP.token . MP.char $ '*')
 
 _DIV :: PyParser Op
-_DIV = Div <<| (GP.token . GP.char $ '/')
+_DIV = Div <<| (MP.token . MP.char $ '/')
 
 _ASSIGN :: PyParser Op
-_ASSIGN = Assign <<| (GP.token $ GP.char '=')
+_ASSIGN = Assign <<| (MP.token $ MP.char '=')
 
 _DEF :: PyParser String
-_DEF = GP.token . GP.exact $ "def"
+_DEF = MP.token . MP.exact $ "def"
 
 _COLON :: PyParser Char
-_COLON = GP.token . GP.char $ ':'
+_COLON = MP.token . MP.char $ ':'
 
 _COMMA :: PyParser Char
-_COMMA = GP.token . GP.char $ ','
+_COMMA = MP.token . MP.char $ ','
 
 _AS :: PyParser String
-_AS = GP.token . GP.exact $ "as"
+_AS = MP.token . MP.exact $ "as"
 
 _IMPORT :: PyParser String
-_IMPORT = GP.token . GP.exact $ "import"
+_IMPORT = MP.token . MP.exact $ "import"
 
 _FROM :: PyParser String
-_FROM = GP.token . GP.exact $ "from"
+_FROM = MP.token . MP.exact $ "from"
 
 _FOR :: PyParser String
-_FOR = GP.token . GP.exact $ "for"
+_FOR = MP.token . MP.exact $ "for"
 
 _WHILE :: PyParser String
-_WHILE = GP.token . GP.exact $ "while"
+_WHILE = MP.token . MP.exact $ "while"
 
 _IN :: PyParser String
-_IN = GP.token . GP.exact $ "in"
+_IN = MP.token . MP.exact $ "in"
 
 functionDefinition :: Int -> PyParser Grammar
 functionDefinition n = definition' <*> scope (n + 1)
   where
     arguments' :: PyParser [Argument]
-    arguments' = GP.parenthesized (name' // (GP.char ',' <* GP.spaces))
+    arguments' = MP.parenthesized (name' // (MP.char ',' <* MP.spaces))
     signature' :: PyParser (Scope -> Grammar)
     signature' = FunctionDefinition <$> name' <*> arguments'
     definition' :: PyParser (Scope -> Grammar)
-    definition' = GP.between _DEF (_COLON <* GP.newLine) signature'
+    definition' = MP.between _DEF (_COLON <* MP.newLine) signature'
 
 scope :: Int -> PyParser Scope
-scope n = Scope <$> GP.repeated1 (indent n >> inner')
+scope n = Scope <$> MP.repeated1 (indent n >> inner')
   where
-    line' ep = GP.token ep <* GP.newLine
+    line' ep = MP.token ep <* MP.newLine
     inner' :: PyParser Grammar
     inner' =
       (line' import')
@@ -218,7 +218,7 @@ scope n = Scope <$> GP.repeated1 (indent n >> inner')
         <|> functionDefinition n
         <|> blankLine
 
-parsepy :: String -> GP.GeneralParsedData Scope [String]
+parsepy :: String -> MP.ParsedData Scope [String]
 parsepy = pyparse (scope 0)
 
 testFilePath :: String
@@ -257,4 +257,4 @@ spec = do
     print value
     let parsed' = parsepy value
     print parsed'
-    shouldBe parsed' (GP.ParsedData expected')
+    shouldBe parsed' (MP.ParsedData expected')

@@ -1,10 +1,10 @@
-module DotEnv.DotEnvSpec (spec) where
+module DotEnvSpec (spec) where
 
 import Mparse.DotEnv
 import Test.Hspec
 
 testFilePath :: String
-testFilePath = "test/V1/DotEnv/test.env"
+testFilePath = "test/samples/dotenv/test.env"
 
 spec :: Spec
 spec = do

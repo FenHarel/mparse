@@ -1,7 +1,7 @@
 module Mparse.DotEnv where
 
 import Control.Applicative (Alternative ((<|>)))
-import Mparse.GeneralParser
+import Mparse.MParser
 
 type Location = (Int, Int, Int)
 
@@ -12,11 +12,9 @@ instance ParseState ParseLocation where
   consumeCharacter '\n' (ParseLocation (lcp, _, acp)) = ParseLocation (lcp + 1, 0, acp + 1)
   consumeCharacter _ (ParseLocation (lcp, rcp, acp)) = ParseLocation (lcp, rcp + 1, acp + 1)
 
-type DotEnvParser = GeneralParser ParseLocation
+type DotEnvParser = MParser ParseLocation
 
-type KeyValue = (String, String)
-
-dotenvparse :: DotEnvParser a -> String -> GeneralParsedData a [String]
+dotenvparse :: DotEnvParser a -> String -> ParsedData a [String]
 dotenvparse = parsed
 
 data ValueComponent
