@@ -129,6 +129,18 @@ char c = sat (== c)
 notChar :: (ParseState s) => Char -> GeneralParser s Char
 notChar c = sat (/= c)
 
+data Blacklist = Blacklisted | Allowed
+
+blacklisted :: (ParseState s) => GeneralParser s b -> GeneralParser s Blacklist
+blacklisted bp = (Blacklisted <<| bp) <|> result Allowed
+
+(|-|) :: (ParseState s) => GeneralParser s Blacklist -> GeneralParser s a -> GeneralParser s a
+bp |-| ep = bp >>= proceedIfAllowed' ep
+  where
+    proceedIfAllowed' :: (ParseState s) => GeneralParser s a -> Blacklist -> GeneralParser s a
+    proceedIfAllowed' _ Blacklisted = parser $ \input -> [Failure . Root $ ("Blacklisted", input)]
+    proceedIfAllowed' ep' Allowed = ep'
+
 -- Consumes a numeric character
 digit :: (ParseState s) => GeneralParser s Char
 digit = sat isDigit

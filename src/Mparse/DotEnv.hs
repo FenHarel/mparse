@@ -1,7 +1,24 @@
 module Mparse.DotEnv where
 
 import Control.Applicative (Alternative ((<|>)))
-import Mparse.Parser
+-- import Mparse.Parser
+import Mparse.GeneralParser
+
+type Location = (Int, Int, Int)
+
+data ParseLocation = ParseLocation Location deriving (Show, Eq)
+
+instance ParseState ParseLocation where
+  initialState = ParseLocation (0, 0, 0)
+  consumeCharacter '\n' (ParseLocation (lcp, _, acp)) = ParseLocation (lcp + 1, 0, acp + 1)
+  consumeCharacter _ (ParseLocation (lcp, rcp, acp)) = ParseLocation (lcp, rcp + 1, acp + 1)
+
+type DotEnvParser = GeneralParser ParseLocation
+
+type KeyValue = (String, String)
+
+dotenvparse :: DotEnvParser a -> String -> GeneralParsedData a [String]
+dotenvparse = parsed
 
 data ValueComponent
   = Literal String
@@ -9,29 +26,38 @@ data ValueComponent
   | Command String
   deriving (Show, Eq)
 
-variable :: Parser ValueComponent
-variable = bracket openSub var closeSub
-  where
-    openSub = then' (\a b -> [a, b]) (sat (== '$')) (sat (== '{'))
-    closeSub = sat (== '}')
-    var :: Parser ValueComponent
-    var = Variable <$> many1 (Parser withEscapedClose)
-    withEscapedClose [] = []
-    withEscapedClose ('}' : _) = []
-    withEscapedClose ('\\' : '}' : xs) = [('}', xs)]
-    withEscapedClose (x : xs) = [(x, xs)]
+escape :: Char -> DotEnvParser Char
+escape c = char '\\' >> char c
 
-command :: Parser ValueComponent
-command = bracket openSub com closeSub
+variable :: DotEnvParser ValueComponent
+variable = between openSub closeSub var
   where
-    openSub = pair (sat (== '$')) (sat (== '('))
+    openSub = sat (== '$') |:| sat (== '{')
+    closeSub = sat (== '}')
+    var :: DotEnvParser ValueComponent
+    var = Variable <$> repeated1 validCharacter
+      where
+        escapedClose :: DotEnvParser Char
+        escapedClose = escape '}'
+        notClose :: DotEnvParser Char
+        notClose = notChar '}'
+        validCharacter :: DotEnvParser Char
+        validCharacter = (escapedClose <|> notClose)
+
+command :: DotEnvParser ValueComponent
+command = between openSub closeSub com
+  where
+    openSub = sat (== '$') |:| sat (== '(')
     closeSub = sat (== ')')
-    com :: Parser ValueComponent
-    com = Command <$> many1 (Parser withEscapedClose)
-    withEscapedClose [] = []
-    withEscapedClose (')' : _) = []
-    withEscapedClose ('\\' : ')' : xs) = [(')', xs)]
-    withEscapedClose (x : xs) = [(x, xs)]
+    com :: DotEnvParser ValueComponent
+    com = Command <$> repeated1 validCharacter
+      where
+        escapedClose :: DotEnvParser Char
+        escapedClose = escape ')'
+        notClose :: DotEnvParser Char
+        notClose = notChar ')'
+        validCharacter :: DotEnvParser Char
+        validCharacter = (escapedClose <|> notClose)
 
 data ComponentEvaluationMode
   = Raw
@@ -67,7 +93,7 @@ evaluate' mode (ComponentizedValue name components) = (name, concatMap evaluateC
     evaluateComponentForMode EnvLoad _ = error "not implemented"
     evaluateComponent = evaluateComponentForMode mode
 
-valueComponentsForDoubleQuotes' :: Parser [ValueComponent]
+valueComponentsForDoubleQuotes' :: DotEnvParser [ValueComponent]
 valueComponentsForDoubleQuotes' =
   do
     value <- variable <|> command <|> literalValue
@@ -75,34 +101,47 @@ valueComponentsForDoubleQuotes' =
     return (value : values)
     <|> return []
   where
-    literalValue = Literal <$> many' escapeItem
+    literalValue = Literal <$> repeated validCharacter
     isEmptyLiteral :: ValueComponent -> Bool
     isEmptyLiteral (Literal "") = True
     isEmptyLiteral _ = False
-    escapeItem = Parser parseEscapeChar
-    parseEscapeChar [] = []
-    parseEscapeChar ('"' : _) = []
-    parseEscapeChar ('$' : '(' : _) = []
-    parseEscapeChar ('$' : '{' : _) = []
-    parseEscapeChar ('\\' : '\n' : xs) = [('\n', xs)]
-    parseEscapeChar ('\\' : '\r' : xs) = [('\r', xs)]
-    parseEscapeChar ('\\' : '\t' : xs) = [('\t', xs)]
-    parseEscapeChar ('\\' : '\f' : xs) = [('\f', xs)]
-    parseEscapeChar ('\\' : '\b' : xs) = [('\b', xs)]
-    parseEscapeChar ('\\' : '\"' : xs) = [('\"', xs)]
-    parseEscapeChar ('\\' : '\'' : xs) = [('\'', xs)]
-    parseEscapeChar ('\\' : '\\' : xs) = [('\\', xs)]
-    parseEscapeChar ('\\' : '$' : xs) = [('$', xs)]
-    parseEscapeChar ('\\' : x : xs) = [(x, xs)]
-    parseEscapeChar (x : xs) = [(x, xs)]
+    escapedCharacters :: DotEnvParser Char
+    escapedCharacters =
+      escape '\n'
+        <|> escape '\r'
+        <|> escape '\t'
+        <|> escape '\f'
+        <|> escape '\b'
+        <|> escape '\"'
+        <|> escape '\''
+        <|> escape '\\'
+        <|> escape '$'
+        <|> (char '\\' >> item)
+        <|> item
+    validCharacter :: DotEnvParser Char
+    validCharacter = blacklist' |-| escapedCharacters
+      where
+        blacklist' :: DotEnvParser Blacklist
+        blacklist' =
+          blacklisted (char '"')
+            <|> blacklisted (exact "$(")
+            <|> blacklisted (exact "${")
 
-unquotedVariable :: Parser ComponentizedValue
+equals' :: DotEnvParser a -> DotEnvParser b -> DotEnvParser (a, b)
+equals' = pairOn (token $ char '=')
+
+identifier :: DotEnvParser String
+identifier = alpha_ |: repeated (alpha_ <|> digit)
+  where
+    alpha_ = letter <|> char '_'
+
+unquotedVariable :: DotEnvParser ComponentizedValue
 unquotedVariable =
   do
     (name, components) <- identifier `equals'` valueComponents
     return (ComponentizedValue name components)
   where
-    valueComponents :: Parser [ValueComponent]
+    valueComponents :: DotEnvParser [ValueComponent]
     valueComponents =
       do
         value <- command <|> variable <|> literalValue
@@ -110,37 +149,39 @@ unquotedVariable =
         return (value : values)
         <|> return []
       where
-        literalValue = Literal <$> many1 literal
-        literal = Parser parseLiteral
-        parseLiteral [] = []
-        parseLiteral (' ' : _) = []
-        parseLiteral ('\t' : _) = []
-        parseLiteral ('#' : _) = []
-        parseLiteral ('\n' : _) = []
-        parseLiteral ('$' : '(' : _) = []
-        parseLiteral ('$' : '{' : _) = []
-        parseLiteral ('\\' : '$' : xs) = [('$', xs)]
-        parseLiteral (x : xs) = [(x, xs)]
+        literalValue = Literal <$> repeated1 validCharacters
+        validCharacters :: DotEnvParser Char
+        validCharacters = blacklist' |-| escapedCharacters
+          where
+            escapedCharacters :: DotEnvParser Char
+            escapedCharacters = (char '\\' >> char '$') <|> item
+            blacklist' :: DotEnvParser Blacklist
+            blacklist' =
+              blacklisted (char ' ')
+                <|> blacklisted (char '\t')
+                <|> blacklisted (char '#')
+                <|> blacklisted (char '\n')
+                <|> blacklisted (exact "$(")
+                <|> blacklisted (exact "${")
 
-variableInSingleQuotes :: Parser ComponentizedValue
+variableInSingleQuotes :: DotEnvParser ComponentizedValue
 variableInSingleQuotes =
   do
     (name, value) <- identifier `equals'` valueInSingleQuotes
     return (ComponentizedValue name [Literal value])
   where
-    sq = char '\''
     notSq = sat (/= '\'')
-    valueInSingleQuotes = token $ bracket sq (many' notSq) sq
+    valueInSingleQuotes = token $ sQuoted (repeated notSq)
 
-variableInDoubleQuotes :: Parser ComponentizedValue
+variableInDoubleQuotes :: DotEnvParser ComponentizedValue
 variableInDoubleQuotes =
   do
     (name, results) <- identifier `equals'` valueComponents
     return (ComponentizedValue name results)
   where
-    valueComponents :: Parser [ValueComponent]
-    valueComponents = token $ bracket (char '"') valueComponentsForDoubleQuotes (char '"')
-    valueComponentsForDoubleQuotes :: Parser [ValueComponent]
+    valueComponents :: DotEnvParser [ValueComponent]
+    valueComponents = token $ dQuoted valueComponentsForDoubleQuotes
+    valueComponentsForDoubleQuotes :: DotEnvParser [ValueComponent]
     valueComponentsForDoubleQuotes =
       do
         value <- variable <|> command <|> literalValue
@@ -148,41 +189,48 @@ variableInDoubleQuotes =
         return (value : values)
         <|> return []
       where
-        literalValue = Literal <$> many' escapeItem
+        literalValue = Literal <$> repeated validCharacters
         isEmptyLiteral :: ValueComponent -> Bool
         isEmptyLiteral (Literal "") = True
         isEmptyLiteral _ = False
-        escapeItem = Parser parseEscapeChar
-        parseEscapeChar [] = []
-        parseEscapeChar ('"' : _) = []
-        parseEscapeChar ('$' : '(' : _) = []
-        parseEscapeChar ('$' : '{' : _) = []
-        parseEscapeChar ('\\' : '\n' : xs) = [('\n', xs)]
-        parseEscapeChar ('\\' : '\r' : xs) = [('\r', xs)]
-        parseEscapeChar ('\\' : '\t' : xs) = [('\t', xs)]
-        parseEscapeChar ('\\' : '\f' : xs) = [('\f', xs)]
-        parseEscapeChar ('\\' : '\b' : xs) = [('\b', xs)]
-        parseEscapeChar ('\\' : '\"' : xs) = [('\"', xs)]
-        parseEscapeChar ('\\' : '\'' : xs) = [('\'', xs)]
-        parseEscapeChar ('\\' : '\\' : xs) = [('\\', xs)]
-        parseEscapeChar ('\\' : '$' : xs) = [('$', xs)]
-        parseEscapeChar ('\\' : x : xs) = [(x, xs)]
-        parseEscapeChar (x : xs) = [(x, xs)]
+        validCharacters :: DotEnvParser Char
+        validCharacters = blacklist' |-| escapedCharacters
+          where
+            blacklist' :: DotEnvParser Blacklist
+            blacklist' =
+              blacklisted (char '"')
+                <|> blacklisted (exact "$(")
+                <|> blacklisted (exact "${")
+            escapedCharacters :: DotEnvParser Char
+            escapedCharacters =
+              escape '\n'
+                <|> escape '\r'
+                <|> escape '\t'
+                <|> escape '\f'
+                <|> escape '\b'
+                <|> escape '\"'
+                <|> escape '\''
+                <|> escape '\\'
+                <|> escape '$'
+                <|> (char '\\' >> item)
+                <|> item
 
-parseAll :: Parser [ComponentizedValue]
+parseAll :: DotEnvParser [ComponentizedValue]
 parseAll =
   do
-    _ <- many' (spaces >> zeroOrOne comment >> newLine)
+    _ <- repeated (spaces >> optional comment >> newLine)
     first <- variableInDoubleQuotes <|> variableInSingleQuotes <|> unquotedVariable
     rest <- parseAll
     return (first : rest)
     <|> return []
   where
-    comment :: Parser String
-    comment = token (char '#') >> many' notNewLine
+    comment :: DotEnvParser String
+    comment = token (char '#') >> repeated notNewLine
 
 parsedComponentizedValues :: String -> Maybe [ComponentizedValue]
-parsedComponentizedValues = parsedValue parseAll
+parsedComponentizedValues input = case dotenvparse parseAll input of
+  ParsedData a -> Just a
+  _ -> Nothing
 
 parsedDotEnv :: ComponentEvaluationMode -> FilePath -> IO [(String, String)]
 parsedDotEnv mode path =
@@ -195,5 +243,5 @@ parsedDotEnv mode path =
 parsedDotEnvDebug :: FilePath -> IO [(String, String)]
 parsedDotEnvDebug = parsedDotEnv Debug
 
-parsed :: FilePath -> IO [(String, String)]
-parsed = parsedDotEnv Raw
+parsedFile :: FilePath -> IO [(String, String)]
+parsedFile = parsedDotEnv Raw
