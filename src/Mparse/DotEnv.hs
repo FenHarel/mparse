@@ -1,7 +1,6 @@
 module Mparse.DotEnv where
 
 import Control.Applicative (Alternative ((<|>)))
--- import Mparse.Parser
 import Mparse.GeneralParser
 
 type Location = (Int, Int, Int)
