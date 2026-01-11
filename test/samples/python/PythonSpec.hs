@@ -254,7 +254,5 @@ spec :: Spec
 spec = do
   it "python" $ do
     value <- readFile testFilePath
-    print value
     let parsed' = parsepy value
-    print parsed'
     shouldBe parsed' (MP.ParsedData expected')
